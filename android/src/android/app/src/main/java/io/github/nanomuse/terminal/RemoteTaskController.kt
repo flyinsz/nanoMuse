@@ -10,10 +10,13 @@ import io.github.nanomuse.hub.Hub
 import io.github.nanomuse.hub.HubException
 import io.github.nanomuse.reach.Computers
 import io.github.nanomuse.reach.RemoteApprovalKey
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A whole task for another device's own Muse, sent straight from the chat instead of through
@@ -50,6 +53,16 @@ object RemoteTaskController {
     /** Whether this phone may run things on another device at all. */
     fun available(context: Context): Boolean = Hub.isConnected && Hub.others(context).isNotEmpty()
 
+    /** Where a card's answer is worked out, off the hub's event thread. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * The card id for one question: the target's `approval_id`, namespaced so it can never
+     * collide with a card this phone raised for something else (its own shell, a computer's
+     * pushed question) or with another device's question that happens to carry the same id.
+     */
+    internal fun cardId(device: Computers.Computer, approvalId: String): String = "task|${device.hubId}|$approvalId"
+
     /**
      * Sends [text] to [device]'s Muse. Progress arrives through [onStep]; [sessionId] names
      * the chat an approval card belongs to, so a remembered answer is remembered there.
@@ -75,22 +88,52 @@ object RemoteTaskController {
             .put("stream", true)
             .apply { if (language.isNotBlank()) put("language", language) }
 
+        // The questions of this run in flight: the target's `approval_id` → the id the card
+        // here carries. Per call, not per object: two runs at once (two chats, a second run
+        // started from a chat already waiting) would otherwise take each other's cards down.
+        // Concurrent because the answer comes off the hub's event thread and the card is
+        // answered on the main one.
+        val cards = ConcurrentHashMap<String, String>()
+
         val result = try {
             Hub.call(device.hubId, "task", body, TIMEOUT_MS) { event ->
                 when (event.optString("stage")) {
                     "approval" -> {
-                        val id = event.optString("approval_id")
-                        if (id.isNotBlank()) {
-                            val allow = runBlocking { decideApproval(sessionId, device, event) }
-                            // the answer goes to that Muse at once; it is waiting on it
-                            runCatching {
-                                Hub.call(
-                                    device.hubId,
-                                    "approve",
-                                    JSONObject().put("approval_id", id).put("allow", allow),
-                                    timeoutMs = 30_000L,
-                                )
+                        // The question is answered off this thread, never waited on here: the
+                        // event pump runs one handler at a time, so blocking it would hold back
+                        // every frame behind this one — including the `approval_result` that
+                        // says the target settled the question itself (upstream issue: the card
+                        // then stayed up until the gate's own three-minute timeout).
+                        val approvalId = event.optString("approval_id")
+                        if (approvalId.isNotBlank()) {
+                            val card = cardId(device, approvalId)
+                            cards[approvalId] = card
+                            scope.launch {
+                                val allow = decideApproval(sessionId, device, card, event)
+                                // no card came back: it was settled elsewhere (or this run ended)
+                                // while the person was being asked, and an answer now would be
+                                // about a question that is already gone
+                                if (cards.remove(approvalId) == null) return@launch
+                                // the answer goes to that Muse at once; it is waiting on it
+                                runCatching {
+                                    Hub.call(
+                                        device.hubId,
+                                        "approve",
+                                        JSONObject().put("approval_id", approvalId).put("allow", allow),
+                                        timeoutMs = 30_000L,
+                                    )
+                                }
                             }
+                        }
+                    }
+                    "approval_result" -> {
+                        // Decided at that device (or expired there): the card here comes down
+                        // without an answer from this phone, the way a computer's own card does
+                        // (`ComputerCards`). Nothing is sent back: a `Deny` from here would
+                        // overrule a decision that device already made for itself.
+                        val approvalId = event.optString("approval_id")
+                        if (approvalId.isNotBlank()) {
+                            cards.remove(approvalId)?.let { RiskGate.withdraw(it) }
                         }
                     }
                     "tool" -> {
@@ -118,6 +161,13 @@ object RemoteTaskController {
         } catch (e: Exception) {
             return if (stopFlag()) Outcome.Stopped
             else Outcome.Failed(e.message ?: "the device did not answer")
+        } finally {
+            // The run is over: a card still up belongs to a step that will not run (the target
+            // tears its own pending questions down with the run), so it comes down here too. A
+            // waiter woken by this finds its entry gone and sends nothing.
+            for (approvalId in cards.keys.toList()) {
+                cards.remove(approvalId)?.let { RiskGate.withdraw(it) }
+            }
         }
 
         if (stopFlag()) return Outcome.Stopped
@@ -157,11 +207,13 @@ object RemoteTaskController {
      * One question that Muse asked, on this phone's card. The card is the app's usual one
      * ([RiskGate]), so a standing answer covers what it says it covers and nothing wider;
      * [RemoteApprovalKey] reads the `grant_key` the target sent, so two different steps
-     * cannot share one remembered answer.
+     * cannot share one remembered answer. [card] is the id the card carries here, so the
+     * question can be taken back when the target settles it first.
      */
     private suspend fun decideApproval(
         sessionId: String,
         device: Computers.Computer,
+        card: String,
         event: JSONObject,
     ): Boolean {
         val preview = event.optString("preview").ifBlank { event.optString("summary") }
@@ -176,6 +228,7 @@ object RemoteTaskController {
             assessment,
             preview = "${device.name}: $preview",
             pageUrl = device.name,
+            requestId = card,
         )
         return outcome is GateOutcome.Allowed
     }

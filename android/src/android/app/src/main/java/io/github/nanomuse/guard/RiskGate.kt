@@ -202,6 +202,10 @@ object RiskGate {
         preview: String,
         pageUrl: String? = null,
         elementText: String? = null,
+        // nanoMuse: the caller's own name for the card, so it can take the card back
+        // ([withdraw]) when the question is settled elsewhere — a task on another device
+        // answered there. Null (every other caller) keeps the request's random id.
+        requestId: String? = null,
     ): GateOutcome {
         // what the record hears of this (ClientEvents, docs/cloud.md "Client events"): the tool's
         // kind, the risk's tier and the phone's own class, never the command or the page
@@ -228,6 +232,7 @@ object RiskGate {
             )
         }
         val request = RiskRequest(
+            id = requestId ?: UUID.randomUUID().toString(), // nanoMuse: see the parameter above
             sessionId = sessionId,
             kind = kind,
             assessment = assessment,
