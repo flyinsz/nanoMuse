@@ -8,8 +8,39 @@
 ```
 origin     https://github.com/flyinsz/nanoMuse.git      ← 唯一能推的
 upstream   https://github.com/nano-muse/nanoMuse.git    ← 只读（push URL 已设为 no-push-upstream）
-openminis  https://github.com/OpenMinis/OpenMinis.git   ← 只读，只在合并 android/ 子树时用
+openminis  https://github.com/OpenMinis/OpenMinis.git   ← 只读，*只在需要时*用（见下）
 ```
+
+## 两个「版本」不要混
+
+| | 是什么 | 状态（2026-11-03） |
+|---|---|---|
+| **nanoMuse 仓库** | 我们 fork 的对象 | ✅ 最新，`main` = 上游 `91f49429` |
+| **`android/` 目录** | nanoMuse 用 `git subtree` 引入的 OpenMinis 快照 | ⏸ 停在 **1.13** |
+
+`android/` 是 subtree 快照，不跟着上游走。逐文件比对 git blob 哈希的结果：
+
+```
+OpenMinis 1.13 ：398/398 文件与 android/ 完全一致   ← 基线
+OpenMinis 1.14 ：395/398
+OpenMinis 1.15 ：385/392
+```
+
+## ⚠️ 不要主动合并 OpenMinis 子树
+
+上游 nanoMuse **自己也没合并** 1.14 / 1.15：
+
+- `upstream/main:android/BUILDING.md` 与我们的 blob 哈希完全相同
+- 上游 `CONTRIBUTING.md:44` 的示例仍是 `subtree pull … 1.14`
+- 上游无相关 branch / PR
+
+`git subtree pull` 会写入一条**把 OpenMinis 历史接进本仓的 merge commit**。
+我们抢先做，就在 fork 里造出一段「上游没有的 subtree merge 史」，
+此后 `git rebase upstream/main` 会反复冲突——**反而制造了要避免的麻烦**。
+而这一合并是 2805 个文件 / 72 万行（1.13→1.15），对上 620 处 `// nanoMuse:` 标记。
+
+**做法：`android/` 保持 1.13，等上游合并时我们 rebase 跟随。**
+`nm-fork.sh release` 保留备用（上游合并后若需重建本地子树可参考），**默认不执行**。
 
 ## 网络
 
@@ -51,17 +82,25 @@ bash scripts/local/nm-fork.sh marks
 当前基线（2026-11-03）的既存量：**112 个上游 Kotlin 文件、620 处标记**，
 `ChatViewModel.kt` 一个文件 114 处。这是上游自己的债务，我们的目标是**不再增加**。
 
-## 每月一次：合并 OpenMinis 子树
+## 上游发新版之后：跟随，不要抢先
 
-`android/` 是 OpenMinis 的 `git subtree`，对方 squash 后月度发布。
-当前基线是 **1.13**（2026-09-02），上游已发 1.14（09-29）、1.15（10-25）。
+`android/` 是 OpenMinis 的 `git subtree`，对方 squash 后月度发布。**合并是上游的动作。**
+
+上游合并后我们只需：
+
+```bash
+bash scripts/local/nm-fork.sh sync      # rebase 到新的 upstream/main
+bash scripts/local/nm-fork.sh marks     # 确认我们的标记还在
+```
+
+如果确实需要在本机试一次子树合并（例如想评估冲突规模），用它，**但不要推到 `main`**：
 
 ```bash
 bash scripts/local/nm-fork.sh release 1.15
 ```
 
 它会：切分支 → `git subtree pull --prefix=android openminis 1.15` → 图标冲突取我们的，
-然后停下来告诉你下一步（解标记冲突 → 跑 `scripts/rebrand.py` → 跑图标脚本）。
+然后停下来告诉你下一步（解标记冲突 → `scripts/rebrand.py` → 图标脚本）。
 **`rebrand.py` 第二次运行必须打印 `clean`。**
 
 ## 提交与 PR
@@ -69,13 +108,15 @@ bash scripts/local/nm-fork.sh release 1.15
 - `git commit -s`（DCO 签名，上游 CI 会查）
 - Conventional Commits：`feat(android): …` / `fix(hub): …`
 - rebase 或 merge commit，**绝不 squash**——每条 `Signed-off-by` 都是记录
+- 改 `web/` 必须 `cd web && npm run check && npm run build`，并把 `nanomuse/server/static/` 一起提交（那是入库的构建产物）
+- 改 `harness/dsh-nanomuse/` 必须 `pnpm build && pnpm typecheck && pnpm test`
 
 ## fork 侧已做的设置
 
 | 项 | 值 | 为什么 |
 |---|---|---|
 | Actions | **已禁用** | fork 默认会跑上游的全量 CI（Ubuntu+macOS+Windows 矩阵、Android APK、Docker），纯浪费配额。我们推 PR 到上游时它们会在上游仓库跑 |
-| Issues | 关闭 | issue 走上游 |
+| Issues | **已启用** | 本地跟进度用；对上游的问题仍走上游 issue |
 | `upstream` / `openminis` 的 push URL | `no-push-…` | 手滑推不上去 |
 | `pull.ff` | `only` | 防止意外的 merge |
 | 克隆方式 | 完整克隆（**不是** `--filter=blob:none`） | 部分克隆会让 `git subtree pull` 在缺 blob 时挂住 |
