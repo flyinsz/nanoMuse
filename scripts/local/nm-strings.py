@@ -62,7 +62,10 @@ def main() -> int:
         for path in locales():
             text = path.read_text("utf-8")
             have = set(re.findall(r'<string name="([^"]+)"', text))
-            gone = sorted(k for k in NEW if k not in have)
+            # values-zh/ carries the Chinese, so it is the ZH keys that have to be there; every
+            # other locale carries the English ones
+            want = ZH if path.parent.name == "values-zh" else NEW
+            gone = sorted(k for k in want if k not in have)
             if gone:
                 print(f"{path.relative_to(ROOT)}: missing {', '.join(gone)}")
         return 0

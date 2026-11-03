@@ -1168,6 +1168,11 @@ const zhCN: Record<string, string> = {
   "online": "在线",
   "Ask": "去问它",
   "Ask one of your devices": "让某台设备去做",
+  // the device strip above the composer (0.1.42)
+  "Your devices": "你的设备",
+  "Open the chat with {device}": "打开与 {device} 的对话",
+  "{device} is offline": "{device} 当前离线",
+  "{device} is not connected right now.": "{device} 现在没有连接。",
   // the Devices page as cards (0.1.37)
   "Every device signed in to your account is a Muse of its own, on the same conversations. Type @ and a device's name in the chat to hand it work; a computer lends its hands.":
     "登录你账号的每台设备都是一个自己的 Muse，看到的是同一批对话。在聊天里输入 @ 加设备名，就能把活交给它；电脑还能出借它的双手。",

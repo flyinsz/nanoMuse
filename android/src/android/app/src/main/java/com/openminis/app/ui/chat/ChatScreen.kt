@@ -105,6 +105,8 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AppShortcut
+// nanoMuse: the `@` picker's device rows wear a device icon, not the document one (docs/hub.md)
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.ArrowCircleUp
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
@@ -5422,8 +5424,15 @@ fun ChatScreen(
                                             // <mountName>). iOS varies the icon per scope but
                                             // we keep it uniform here so the row stays
                                             // visually consistent at small sizes on Pixel 4a.
+                                            // nanoMuse: a device row wears a device icon, so it
+                                            // is not mistaken for a file (docs/hub.md); the
+                                            // name comes from the row's own badge.
                                             Icon(
-                                                imageVector = Icons.Default.Description,
+                                                imageVector = if (entry.mountName == io.github.nanomuse.terminal.DeviceStrip.DEVICE_BADGE) {
+                                                    Icons.Default.PhoneAndroid
+                                                } else {
+                                                    Icons.Default.Description
+                                                },
                                                 contentDescription = null,
                                                 tint = ChatColors.secondaryText,
                                                 modifier = Modifier.size(16.dp),

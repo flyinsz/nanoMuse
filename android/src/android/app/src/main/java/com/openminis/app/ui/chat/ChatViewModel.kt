@@ -1602,10 +1602,17 @@ class ChatViewModel(
     /** Live-filtered candidate list. Combines the index's [FileMentionIndex.entries]
      * with [mentionFilter] so matches refresh as the user types and as the
      * background scan emits more entries. Capped at 50 like iOS. */
+    // nanoMuse: the account's devices come first, above the files, so `@` can address one
+    // without its name being typed out (docs/hub.md; iOS reads the same menu in
+    // NanoMuseDeviceMention.menuEntries). The rows are [FileMentionIndex.Entry] like any
+    // other, which keeps the picker's keyboard navigation and commit working unchanged.
     val mentionEntries: StateFlow<List<FileMentionIndex.Entry>> = combine(
         fileMentionIndex.entries,
         _mentionFilter,
-    ) { _, filter -> fileMentionIndex.matches(filter, limit = 50) }
+    ) { _, filter ->
+        val devices: List<FileMentionIndex.Entry> = io.github.nanomuse.terminal.DeviceStrip.entries(context, filter)
+        devices + fileMentionIndex.matches(filter, limit = 50)
+    }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val isMentionScanning: StateFlow<Boolean>

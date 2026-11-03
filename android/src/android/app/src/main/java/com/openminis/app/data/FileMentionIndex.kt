@@ -75,9 +75,17 @@ class FileMentionIndex(
         val mountName: String?,
         val modifiedAt: Long,
         val isDirectory: Boolean,
+        // nanoMuse: what this row says about the device it offers, or null for a file. Its
+        // presence is what makes the row a device: the picker draws another icon for it and
+        // shows this line instead of the path. One of the account's devices rather than a
+        // file on this phone, offered by the same `@` menu (docs/hub.md; iOS does the same
+        // in NanoMuseDeviceMention.menuEntries).
+        val nmDeviceDetail: String? = null,
     ) {
         val basename: String get() = linuxPath.substringAfterLast('/').ifEmpty { linuxPath }
-        val displayPath: String get() = linuxPath.removePrefix("/var/minis/")
+        // nanoMuse: a device's row says what the device is (its system, whether it is up)
+        // rather than repeating the name the row already shows.
+        val displayPath: String get() = nmDeviceDetail ?: linuxPath.removePrefix("/var/minis/")
     }
 
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
