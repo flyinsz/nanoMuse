@@ -28,6 +28,7 @@ import { AllowanceHeadsUp } from './AllowanceWays.tsx'
 import { WaitLine } from './WaitLine.tsx'
 import { StopAsk, makeThumbs } from './Feedback.tsx'
 import { interceptComposer, makeAvatarChat } from './AvatarChat.tsx'
+import { makeDeviceTask } from './device-task.ts'
 import { makeCapsule } from './Capsule.tsx'
 import { prefillComposer } from './composer.ts'
 import { makeMicButton, makeQuoteAction } from './ComposerExtras.tsx'
@@ -398,6 +399,11 @@ export function apply(ctx: ClientContext): void {
   const AvatarChat = makeAvatarChat(t)
   slots.inject('shell.overlay', () =>
     slots.register({ name: 'shell.overlay', id: 'nanomuse.avatar-chat', locale: 'nanomuse' }, AvatarChat))
+  // The card for a message sent to another device with `@<device>` (the composer's other
+  // interception, in `interceptComposer`): what was asked and how it went.
+  const DeviceTaskCard = makeDeviceTask(t)
+  slots.inject('shell.overlay', () =>
+    slots.register({ name: 'shell.overlay', id: 'nanomuse.device-task', locale: 'nanomuse' }, DeviceTaskCard))
   ctx.effect(() => interceptComposer(), 'nanomuse: avatar words')
   // The microphone at the right of the composer; "reply with a quote" beside Copy.
   const MicButton = makeMicButton(t, () => { shell.openSection(DICTATION_SECTION) })

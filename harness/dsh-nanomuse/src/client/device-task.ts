@@ -14,9 +14,10 @@
  * `deviceTask` is the small state machine the composer drives and the card renders, the same
  * shape `avatarChat` uses: `useSyncExternalStore` over a module-level snapshot.
  */
-import { useSyncExternalStore } from 'react'
+import { createElement as h, useSyncExternalStore, type ReactNode } from 'react'
 import { call, failureText, type Translate } from './api.ts'
 import { deviceMention } from './device-mention.ts'
+import { IconClose, IconSpinner } from './icons.tsx'
 import { peekLive, type LiveDevice } from './live.ts'
 
 /** The answer to one `@<device>` message, as the host half reports it. */
@@ -27,7 +28,11 @@ export interface DeviceAnswer {
   steps: string[]
 }
 
-/** Where a device task stands. */
+/**
+ * Where a device task stands. A question the other device's Muse has to ask does not appear
+ * here: it goes up as this computer's own kind of approval card (the host's `RemoteApprovals`),
+ * drawn from `live.approvals` and answered through the same route as every other card.
+ */
 export interface DeviceTaskState {
   phase: 'idle' | 'asking' | 'answered' | 'failed'
   /** The device's name, for the card's title. */
@@ -81,6 +86,28 @@ export function deviceTaskView(t: Translate, s: DeviceTaskState): { title: strin
   if (s.phase === 'answered') return { title: t('dtAnswered', { device: s.device }), body: s.answer, tone: 'ok' }
   if (s.phase === 'failed') return { title: t('dtFailed', { device: s.device }), body: failureText(t, s.error), tone: 'bad' }
   return { title: '', body: '', tone: 'ok' }
+}
+
+/**
+ * The card the composer's `@<device>` path shows, above the input, the way `avatarChat`'s
+ * card does: what was asked, then either that the device is on it, its answer, or why it
+ * could not finish. A run takes minutes, so something has to say it is out; without this
+ * the message went out and the screen said nothing at all.
+ */
+export function makeDeviceTask(t: Translate) {
+  return function DeviceTaskCard(): ReactNode {
+    const s = useDeviceTask()
+    if (s.phase === 'idle') return null
+    const view = deviceTaskView(t, s)
+    const steps = s.steps.slice(-5)
+    return h('div', { className: `nm-ac nm-dt nm-dt-${view.tone}`, role: 'status', 'aria-label': view.title },
+      h('div', { className: 'nm-ac-head' },
+        h('span', { className: 'nm-ac-title' }, view.title),
+        h('button', { type: 'button', className: 'nm-icon-btn', 'aria-label': t('close'), onClick: deviceTask.dismiss }, h(IconClose, { size: 14 }))),
+      h('div', { className: 'nm-ac-cost' },
+        view.tone === 'busy' ? h('p', { className: 'nm-ac-status nm-live' }, h(IconSpinner, { size: 14 }), view.body) : h('p', { className: 'nm-ac-desc' }, view.body),
+        steps.length ? h('ul', { className: 'nm-dt-steps' }, steps.map((line, i) => h('li', { key: i }, line))) : null))
+  }
 }
 
 export const deviceTask = {

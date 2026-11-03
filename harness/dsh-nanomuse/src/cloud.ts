@@ -43,6 +43,7 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval/types'
 import z from '@deepseek-ai/schemastery'
 import { mountGuarded } from './admit.ts'
+import { RemoteApprovals } from './remote-approvals.ts'
 import { brief, REMOTE_ACTIONS, run as runAction, type RemoteAction } from './actions.ts'
 import { CODING_ACTIONS, CodingService, codingBrief, GATED_CODING_ACTIONS } from './coding.ts'
 import { helloLlm, HubClient, HubError, type Caller, type HubDevice, type IncomingCall } from './hub.ts'
@@ -723,6 +724,12 @@ export default class NanomuseCloud extends Service {
   /** Turns stopped by hand whose reason the person has not given yet, by session (cleared by the answer, Skip, or the next turn). */
   private readonly stops = new Map<string, { turn: number; at: number }>()
   private readonly holdDesk = new HoldDesk(() => this.deskMoved())
+  /**
+   * Questions raised by work sent to another device (`askDevice`): shown on the same cards,
+   * answered through the same route, but held here rather than on the stage's desk (a remote
+   * run has no session of this computer's to hang a grant on).
+   */
+  private readonly remoteApprovals = new RemoteApprovals(() => this.broadcast())
   /** Sessions the other devices were last told are waiting on a card or a hold here (0.31). */
   private waitingSessions = new Set<string>()
   private updateCheck: Promise<UpdateInfo> | undefined
@@ -1766,7 +1773,9 @@ export default class NanomuseCloud extends Service {
       turnSessions: this.turns.sessions(),
       taskRuns: this.tasks?.origins() ?? [],
       handsBusy: this.handsBusy(),
-      approvals: this.approvalDesk.list().length,
+      // + the questions a run elsewhere raised here: a quit with one up is a quit that
+      // abandons that run, so the count the person sees has to include it.
+      approvals: this.approvalDesk.list().length + this.remoteApprovals.list().length,
     })
   }
 
@@ -2563,7 +2572,7 @@ export default class NanomuseCloud extends Service {
       hands: { calls: [...this.calls.values()], steps: this.steps, run: this.screenRuns.current() },
       stage: this.stage,
       notices: this.notices,
-      approvals: this.approvalDesk.list(),
+      approvals: [...this.approvalDesk.list(), ...this.remoteApprovals.list()],
       holds: this.holdDesk.list(),
       grants: this.state.grants ?? [],
       goneSchedules: this.goneSchedules,
@@ -3288,32 +3297,62 @@ export default class NanomuseCloud extends Service {
     return this.profile.current()
   }
 
-  /**
-   * A message the person typed into the composer for another device of the account
-   * (`@<device> …`): the turn runs on that device's own Muse and its answer comes back here.
-   *
-   * This is the `delegate` tool's work without the model in between. Typed at the console, the
-   * mention would otherwise reach this computer's Muse as an ordinary message for the model to
-   * relay, which costs a whole turn and lets it reword what was asked. The frame is the same
-   * either way: `task` in `docs/hub.md`'s vocabulary, progress back as `event` frames.
-   *
-   * A step that device's Muse must ask about is left to it: it raises its own card, the person
-   * answers it there, and the run goes on. `delegate` sends such a question back here instead
-   * because a tool call has an agent to hang the answer on; a message typed by hand has none,
-   * so there is no card here to hold it.
-   *
-   * Fifteen minutes, the target's own limit (`TASK_TIMEOUT_S`): a caller that gives up first
-   * leaves the work running after the person was told it failed, and the answer then has
-   * nowhere to land (upstream issue 805).
-   */
+/**
+ * A message the person typed into the composer for another device of the account
+ * (`@<device> …`): the turn runs on that device's own Muse and its answer comes back here.
+ *
+ * This is the `delegate` tool's work without the model in between. Typed at the console, the
+ * mention would otherwise reach this computer's Muse as an ordinary message for the model to
+ * relay, which costs a whole turn and lets it reword what was asked. The frame is the same
+ * either way: `task` in `docs/hub.md`'s vocabulary, progress back as `event` frames.
+ *
+ * A step that device's Muse must ask about comes back as an `approval` frame and is put to
+ * the person here, on the same kind of card this computer's own questions use (`RemoteApprovals`),
+ * and the answer goes back as `approve {approval_id, allow}`. That is what `docs/hub.md` says
+ * happens ("the cards of a `task` travel back to the caller") and what `delegate` and the
+ * runtime both do; the asking side is the half that was missing here.
+ *
+ * Fifteen minutes, the target's own limit (`TASK_TIMEOUT_S`): a caller that gives up first
+ * leaves the work running after the person was told it failed, and the answer then has
+ * nowhere to land (upstream issue 805).
+ */
   async askDevice(device: string, text: string): Promise<{ device: string; answer: string; steps: string[] }> {
     const asked = text.trim()
     if (!asked) throw new Error('What should it do?')
     const d = askTarget(this.hub, device)
     const steps: string[] = []
+    // The questions this run raised and the promises that go back to the device; answered in
+    // `askEvent`, awaited together before the answer is returned so no card outlives the run.
+    const cards = new Set<Promise<void>>()
     const onEvent = (body: Record<string, unknown>) => {
       const stage = String(body.stage ?? '')
-      if (stage === 'tool') {
+      if (stage === 'approval') {
+        const approvalId = String(body.approval_id ?? '')
+        if (!approvalId) return
+        // The target may answer it itself (its own screen, or a phone of the account) — then
+        // the card here closes through `approval_result`. Until that arrives, ask here.
+        const waiting = this.remoteApprovals
+          .ask({
+            approvalId,
+            device: d.name,
+            preview: String(body.preview ?? ''),
+            reason: String(body.reason ?? ''),
+            risk: String(body.risk ?? ''),
+          })
+          .then((allow) => {
+            // `null`: settled elsewhere, so nothing goes back (a *Deny* here would overrule
+            // an answer the target already gave). A boolean is the person's own word.
+            if (allow === null) return
+            return this.hub
+              .call(d.id, 'approve', { approval_id: approvalId, allow }, { timeoutMs: 30_000 })
+              .then(() => undefined, () => undefined)
+          })
+        cards.add(waiting)
+        void waiting.finally(() => cards.delete(waiting))
+      } else if (stage === 'approval_result') {
+        // settled on the target (or on a phone of the account): the card here is done
+        this.remoteApprovals.forget(String(body.approval_id ?? ''))
+      } else if (stage === 'tool') {
         steps.push(`${String(body.name ?? 'tool')}${body.summary ? `: ${String(body.summary).slice(0, 120)}` : ''}`)
       } else if (stage === 'tool_result' && body.ok === false) {
         steps.push(`failed: ${String(body.summary ?? body.name ?? '')}`.slice(0, 160))
@@ -3338,6 +3377,13 @@ export default class NanomuseCloud extends Service {
     } catch (error: unknown) {
       if (error instanceof HubError) throw new Error(`${error.code}: ${error.message}`)
       throw error
+    } finally {
+      // The run is over: any card still up belongs to a step that will not run (the target's
+      // own teardown cancels its pending approvals), so it comes down here and nothing goes
+      // back over the hub. Awaiting after that lets every round-trip finish before the caller
+      // is told the answer.
+      this.remoteApprovals.releaseDevice(d.name)
+      await Promise.allSettled([...cards])
     }
   }
 
@@ -4286,15 +4332,25 @@ export default class NanomuseCloud extends Service {
         return send(res, 204)
       }
       if (req.method === 'GET' && route === '/update') return send(res, 200, await this.update(url.searchParams.get('force') === '1'))
-      if (req.method === 'GET' && route === '/approvals') return send(res, 200, { approvals: this.approvalDesk.list() })
+      // Both desks: the stage's own cards and the questions another device's run raised here.
+      // The console draws them from one list, so this route and the snapshot must agree.
+      if (req.method === 'GET' && route === '/approvals') return send(res, 200, { approvals: [...this.approvalDesk.list(), ...this.remoteApprovals.list()] })
       if (req.method === 'POST' && route === '/feedback') {
         const body = await json(req)
         return this.feedback(body) ? send(res, 204) : send(res, 400, { error: { code: 'bad_request', message: 'session with vote (up, down, empty) and reason, or stop_reason' } })
       }
       if (req.method === 'POST' && route.startsWith('/approvals/')) {
         const body = await json(req)
+        const id = decodeURIComponent(route.slice('/approvals/'.length))
+        // A card from a remote run is answered here too, but by this desk: no scope, no grant
+        // (that device's tool and target are not this computer's to remember).
+        if (this.remoteApprovals.holds(id)) {
+          return this.remoteApprovals.decide(id, body.approved === true)
+            ? send(res, 204)
+            : send(res, 404, { error: { code: 'not_found', message: 'That question was answered already' } })
+        }
         const scope = body.scope === 'schedule' || body.scope === 'conversation' || body.scope === 'always' ? body.scope : 'once'
-        const ok = this.decideApproval(decodeURIComponent(route.slice('/approvals/'.length)), body.approved === true, scope)
+        const ok = this.decideApproval(id, body.approved === true, scope)
         return ok ? send(res, 204) : send(res, 404, { error: { code: 'not_found', message: 'That question was answered already' } })
       }
       if (req.method === 'GET' && route === '/holds') return send(res, 200, { holds: this.holdDesk.list() })
