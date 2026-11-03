@@ -581,6 +581,25 @@ function canonical(value: unknown): string {
  */
 const REFUSAL_MARKS = ['Not done: ', 'Not done — '] as const
 
+/** The hub's own limit for a `task` (`TASK_TIMEOUT_S` in `nanomuse/hub/service.py`); the target stops at this too, so asking for less only loses the answer. */
+const DEVICE_TASK_TIMEOUT_MS = 15 * 60_000
+
+/**
+ * The device a message addresses or names, for the composer's `@<device>` path. Only devices
+ * that are online: asking an offline one would build a frame the relay answers `device_offline`.
+ */
+function askTarget(hub: HubClient, ref: string): HubDevice {
+  if (!hub.connected) throw new Error('This computer is not connected to the hub right now; try again in a moment.')
+  const wanted = ref.trim()
+  const others = hub.devices.filter((d) => d.id !== hub.deviceId && d.kind !== 'web' && d.online)
+  const found = wanted ? hub.find(wanted) : others.length === 1 ? others[0] : undefined
+  if (!found) {
+    throw new Error(others.length ? `No online device matches "${wanted}". Devices: ${others.map((d) => d.name).join(', ')}.` : 'No other device of the account is online.')
+  }
+  if (!found.online) throw new Error(`${found.name} is offline.`)
+  return found
+}
+
 export function refusalOf(result: ToolExecutionResult): string | undefined {
   const texts: string[] = []
   for (const block of result.content ?? []) {
@@ -3269,6 +3288,59 @@ export default class NanomuseCloud extends Service {
     return this.profile.current()
   }
 
+  /**
+   * A message the person typed into the composer for another device of the account
+   * (`@<device> …`): the turn runs on that device's own Muse and its answer comes back here.
+   *
+   * This is the `delegate` tool's work without the model in between. Typed at the console, the
+   * mention would otherwise reach this computer's Muse as an ordinary message for the model to
+   * relay, which costs a whole turn and lets it reword what was asked. The frame is the same
+   * either way: `task` in `docs/hub.md`'s vocabulary, progress back as `event` frames.
+   *
+   * A step that device's Muse must ask about is left to it: it raises its own card, the person
+   * answers it there, and the run goes on. `delegate` sends such a question back here instead
+   * because a tool call has an agent to hang the answer on; a message typed by hand has none,
+   * so there is no card here to hold it.
+   *
+   * Fifteen minutes, the target's own limit (`TASK_TIMEOUT_S`): a caller that gives up first
+   * leaves the work running after the person was told it failed, and the answer then has
+   * nowhere to land (upstream issue 805).
+   */
+  async askDevice(device: string, text: string): Promise<{ device: string; answer: string; steps: string[] }> {
+    const asked = text.trim()
+    if (!asked) throw new Error('What should it do?')
+    const d = askTarget(this.hub, device)
+    const steps: string[] = []
+    const onEvent = (body: Record<string, unknown>) => {
+      const stage = String(body.stage ?? '')
+      if (stage === 'tool') {
+        steps.push(`${String(body.name ?? 'tool')}${body.summary ? `: ${String(body.summary).slice(0, 120)}` : ''}`)
+      } else if (stage === 'tool_result' && body.ok === false) {
+        steps.push(`failed: ${String(body.summary ?? body.name ?? '')}`.slice(0, 160))
+      } else if (stage === 'text' && body.interim !== true && typeof body.text === 'string' && body.text) {
+        steps.push(`said: ${body.text.slice(0, 160)}`)
+      } else if (stage === 'error') {
+        steps.push(`error: ${String(body.message ?? 'error').slice(0, 160)}`)
+      }
+    }
+    try {
+      const body = await this.hub.call(
+        d.id,
+        'task',
+        { text: asked, from: this.deviceName(), conversation: d.id, stream: true },
+        { timeoutMs: DEVICE_TASK_TIMEOUT_MS, onEvent },
+      )
+      const answer = String(body.text ?? body.answer ?? '').trim()
+      // An empty answer is not an answer (upstream issue 718): steps having run does not make
+      // it one, and showing it as done is how a phone came to say "finished" for work undone.
+      if (!answer) throw new Error(`${d.name} finished without an answer`)
+      return { device: d.name, answer, steps }
+    } catch (error: unknown) {
+      if (error instanceof HubError) throw new Error(`${error.code}: ${error.message}`)
+      throw error
+    }
+  }
+
   /** Rename this computer on the account's list (kept locally too, for the next hello). */
   async renameDevice(name: string): Promise<void> {
     const clean = name.trim().slice(0, 60)
@@ -4181,6 +4253,10 @@ export default class NanomuseCloud extends Service {
       if (req.method === 'POST' && route === '/devices/refresh') {
         this.hub.refreshDevices()
         return send(res, 204)
+      }
+      if (req.method === 'POST' && route === '/devices/ask') {
+        const body = await json(req)
+        return send(res, 200, await this.askDevice(String(body.device ?? ''), String(body.text ?? '')))
       }
       if (req.method === 'POST' && route === '/devices/rename') {
         const body = await json(req)

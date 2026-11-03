@@ -1,5 +1,6 @@
 package io.github.nanomuse.terminal
 
+import android.content.Context
 import io.github.nanomuse.reach.Computers
 
 /**

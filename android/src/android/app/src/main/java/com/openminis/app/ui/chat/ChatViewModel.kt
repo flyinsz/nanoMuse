@@ -6303,6 +6303,9 @@ class ChatViewModel(
         viewModelScope.launch {
             // the person's line first, without the mention, exactly as typed after "@name"
             nmAppendUserLine(sid, asked)
+            // The steps arrive on the hub's own thread and the bubble is written from here, so
+            // they are queued as they come and drawn between the two suspends below.
+            val steps = java.util.concurrent.LinkedBlockingQueue<String>()
             val outcome = withContext(Dispatchers.IO) {
                 io.github.nanomuse.terminal.RemoteTaskController.send(
                     context = context,
@@ -6319,9 +6322,13 @@ class ChatViewModel(
                                 else context.getString(R.string.nm_device_step_failed, step.text)
                             is io.github.nanomuse.terminal.RemoteTaskController.Step.Said -> step.text
                         }
-                        if (line.isNotBlank()) nmAppendAssistantLine(sid, "${device.name}: $line")
+                        if (line.isNotBlank()) steps.add("${device.name}: $line")
                     },
                 )
+            }
+            while (true) {
+                val line = steps.poll() ?: break
+                nmAppendAssistantLine(sid, line)
             }
             val said = when (outcome) {
                 is io.github.nanomuse.terminal.RemoteTaskController.Outcome.Answered -> outcome.text
