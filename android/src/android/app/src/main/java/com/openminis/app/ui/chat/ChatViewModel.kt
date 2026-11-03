@@ -6278,14 +6278,67 @@ class ChatViewModel(
         // nanoMuse: "change your avatar to …" (and a pick while the options are
         // up) is handled in the app, not by the model.
         if (nmInterceptAvatar(text)) { nmCountableTurn = false; return }
-        // nanoMuse: "@Mac …" opens a turn for that device — the mention comes out of the text,
-        // a one-turn note sends the work there through nanomuse-pc (contract C7, rule 8).
+        // nanoMuse: "@Mac …" is work for that device. When it names one that is online the
+        // frame goes there directly (io.github.nanomuse.terminal), so no turn runs here and
+        // nothing can reword what was asked; otherwise the text is left for the note path
+        // below, which sends it through nanomuse-pc (contract C7, rule 8).
+        if (nmSendToDevice(text)) { nmCountableTurn = false; return }
         val nmText = io.github.nanomuse.sync.DeviceMention.apply(context, realSessionId.ifEmpty { sessionId }, text)
         // nanoMuse: during the first conversation the text goes to the model as
         // it is; the model says what it meant in a `nanomuse-naming` block and
         // nmAfterTurn moves the phase (see FirstConversation).
         sendMessage(nmText, skipContextCheck = false)
     }
+
+    // ─── nanoMuse: a message addressed to another device ──────────────────
+    // See io.github.nanomuse.terminal.DeviceTargetMention for why this does not go through
+    // the model. True when the message was taken: it is then handled entirely here.
+
+    private fun nmSendToDevice(text: String): Boolean {
+        if (!text.trimStart().startsWith("@")) return false
+        val sid = realSessionId.ifEmpty { sessionId }
+        val hit = io.github.nanomuse.terminal.DeviceTargetMention.parse(context, text) ?: return false
+        val device = hit.device
+        val asked = hit.text
+        viewModelScope.launch {
+            // the person's line first, without the mention, exactly as typed after "@name"
+            nmAppendUserLine(sid, asked)
+            val outcome = withContext(Dispatchers.IO) {
+                io.github.nanomuse.terminal.RemoteTaskController.send(
+                    context = context,
+                    device = device,
+                    conversation = device.hubId,
+                    text = asked,
+                    sessionId = sid,
+                    language = nmUiLanguage(),
+                    onStep = { step ->
+                        val line = when (step) {
+                            is io.github.nanomuse.terminal.RemoteTaskController.Step.Running -> step.text
+                            is io.github.nanomuse.terminal.RemoteTaskController.Step.Done ->
+                                if (step.ok) step.text
+                                else context.getString(R.string.nm_device_step_failed, step.text)
+                            is io.github.nanomuse.terminal.RemoteTaskController.Step.Said -> step.text
+                        }
+                        if (line.isNotBlank()) nmAppendAssistantLine(sid, "${device.name}: $line")
+                    },
+                )
+            }
+            val said = when (outcome) {
+                is io.github.nanomuse.terminal.RemoteTaskController.Outcome.Answered -> outcome.text
+                is io.github.nanomuse.terminal.RemoteTaskController.Outcome.Failed ->
+                    context.getString(R.string.nm_device_failed, device.name, outcome.reason)
+                io.github.nanomuse.terminal.RemoteTaskController.Outcome.Stopped ->
+                    context.getString(R.string.nm_device_stopped, device.name)
+            }
+            nmAppendAssistantLine(sid, said)
+        }
+        return true
+    }
+
+    /** This phone's screens as a BCP-47 tag, so that device's Muse answers in it. */
+    private fun nmUiLanguage(): String =
+        (context.resources.configuration.locales[0] ?: java.util.Locale.getDefault()).toLanguageTag()
+
 
     // ─── nanoMuse: changing the face from the chat ─────────────────────────
     // See io.github.nanomuse.avatar.AvatarFlow. The request and the pick are

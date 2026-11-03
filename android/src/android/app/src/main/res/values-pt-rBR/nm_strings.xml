@@ -1226,4 +1226,7 @@
     <string name="nm_context_compact_idle_timeout">A compactação parou após %1$d segundos sem resposta (%2$d chamadas ao modelo).</string>
     <string name="nm_context_compact_no_gain">O resumo não reduziu o contexto. O conteúdo original foi mantido.</string>
     <string name="nm_context_compact_incomplete">O modelo não retornou um resumo completo. O contexto original foi mantido.</string>
+    <string name="nm_device_step_failed">failed: %1$s</string>
+    <string name="nm_device_failed">%1$s could not finish: %2$s</string>
+    <string name="nm_device_stopped">Stopped. %1$s was told to end it.</string>
 </resources>

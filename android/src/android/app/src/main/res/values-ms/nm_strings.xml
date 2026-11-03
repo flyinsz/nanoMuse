@@ -1221,4 +1221,7 @@
     <string name="nm_context_compact_idle_timeout">Pemadatan dihentikan selepas %1$d saat tanpa respons (%2$d panggilan model).</string>
     <string name="nm_context_compact_no_gain">Ringkasan tidak memendekkan konteks. Kandungan asal dikekalkan.</string>
     <string name="nm_context_compact_incomplete">Model tidak mengembalikan ringkasan lengkap. Konteks asal dikekalkan.</string>
+    <string name="nm_device_step_failed">failed: %1$s</string>
+    <string name="nm_device_failed">%1$s could not finish: %2$s</string>
+    <string name="nm_device_stopped">Stopped. %1$s was told to end it.</string>
 </resources>

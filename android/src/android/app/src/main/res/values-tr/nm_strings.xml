@@ -1225,4 +1225,7 @@
     <string name="nm_context_compact_idle_timeout">Sıkıştırma, %1$d saniye yanıt alınamadığı için durduruldu (%2$d model çağrısı).</string>
     <string name="nm_context_compact_no_gain">Özet bağlamı kısaltmadı. Orijinal içerik korundu.</string>
     <string name="nm_context_compact_incomplete">Model eksiksiz bir özet döndürmedi. Orijinal bağlam korundu.</string>
+    <string name="nm_device_step_failed">failed: %1$s</string>
+    <string name="nm_device_failed">%1$s could not finish: %2$s</string>
+    <string name="nm_device_stopped">Stopped. %1$s was told to end it.</string>
 </resources>

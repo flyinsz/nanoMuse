@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { api, fileUrl } from "../api";
 import { AllowanceHeadsUp } from "../components/AllowanceWays";
 import { cloudRetryTarget } from "../cloud-retry";
+import { directTarget, sendToDevice } from "../device-send";
 import { AvatarOptionsCard } from "../components/AvatarOptionsCard";
 import { BrowserViewer } from "../components/BrowserViewer";
 import { MicButton, useDictation } from "../components/Dictation";
@@ -24,7 +25,7 @@ import { noteStopped, StopAskCard, Thumbs, useStopAsk } from "../components/Feed
 import { useShowSteps } from "../steps";
 
 export function ChatScreen() {
-  const { state, send, sendViaCloud, decide, loadEvents, openFile, toast, setDrawer, setTab } = useStore();
+  const { state, send, sendViaCloud, decide, loadEvents, openFile, toast, setDrawer, setTab, dispatch } = useStore();
   const t = useT();
   const { profile, status, activeThread, threads } = state;
   // undefined until the first fetch for this thread has returned — don't flash the empty state
@@ -101,6 +102,28 @@ export function ChatScreen() {
     }
   };
   const stopAsk = useStopAsk(activeThread);
+
+  // nanoMuse: the chat on the device this message addresses, opened and given its first
+  // words, or null when the message is not for another device. The runtime does the reading
+  // (`nanomuse/sync/mention.py`); `mentionTarget` is the composer's half of the same rule, so
+  // what the box says it goes to and where it really goes cannot drift apart. A mention with
+  // nothing after it is an ordinary message, as it is for the runtime.
+  const nmDeviceAsk = (text: string): Promise<void> | null => {
+    const device = mentionTarget(text, state.hub?.devices ?? []);
+    if (!device?.online) return null;
+    const asked = text.trimStart().slice(device.name.length + 1).replace(/^[\s,:;，：；]+/, "");
+    if (!asked) return null;
+    return api
+      .askDevice(device.id, asked)
+      .then((r) => {
+        dispatch({ type: "ws", msg: { kind: "thread", thread: r.thread } });
+        dispatch({ type: "activeThread", thread: r.thread.id });
+      })
+      .catch((e: Error) => {
+        toast(e.message || t("Could not send"));
+        throw e;
+      });
+  };
   // The newest finished reply, the one the thumbs go under (a reply voted on earlier keeps
   // its mark): the last bubble with words, with nothing of the person's after it, once the
   // run has ended. A quiet background line is not a reply.
@@ -353,12 +376,17 @@ export function ChatScreen() {
         busy={!!thread?.busy && pendingApprovals === 0}
         waiting={events.some((e) => e.type === "question" && e.status === "pending")}
         onStop={stopActive}
-        onSend={(text, files) =>
-          send(activeThread, text, files).catch((e: Error) => {
+        // nanoMuse: "@Mac …" is work for that device. When it names one that is online the
+        // message opens a chat on that device instead of a turn here, so the runtime never
+        // has to hand it over with `delegate` and nothing can reword what was asked. Anything
+        // else takes the ordinary path below.
+        onSend={(text, files) => {
+          const aimed = nmDeviceAsk(text);
+          return (aimed ?? send(activeThread, text, files)).catch((e: Error) => {
             toast(e.message || t("Could not send"));
             throw e;
-          })
-        }
+          });
+        }}
       />
 
       <MuseSheet open={activityOpen} onClose={() => setActivityOpen(false)} />

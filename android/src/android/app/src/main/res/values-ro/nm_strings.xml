@@ -1229,4 +1229,7 @@
     <string name="nm_context_compact_idle_timeout">Comprimarea s-a oprit după %1$d secunde fără răspuns (%2$d apeluri către model).</string>
     <string name="nm_context_compact_no_gain">Rezumatul nu a redus contextul. Conținutul original a fost păstrat.</string>
     <string name="nm_context_compact_incomplete">Modelul nu a returnat un rezumat complet. Contextul original a fost păstrat.</string>
+    <string name="nm_device_step_failed">failed: %1$s</string>
+    <string name="nm_device_failed">%1$s could not finish: %2$s</string>
+    <string name="nm_device_stopped">Stopped. %1$s was told to end it.</string>
 </resources>
