@@ -21,6 +21,13 @@ object HomeBus {
         data class ShowSession(val sessionId: String) : Request()
         /** Show the main chat with [text] typed into the composer and the keyboard up. */
         data class PrefillComposer(val text: String) : Request()
+        /**
+         * Show [sessionId] and send [text] into it: what a message addressed to another device
+         * does. The message belongs in the chat that device keeps with this phone, not in
+         * whichever chat happened to be open when it was typed (`nmSendToDevice`), and the
+         * person watches it arrive in the right place rather than being told it went.
+         */
+        data class ShowSessionAndSend(val sessionId: String, val text: String) : Request()
     }
 
     private val _requests = MutableSharedFlow<Request>(replay = 1, extraBufferCapacity = 8)
@@ -31,6 +38,10 @@ object HomeBus {
     fun showSession(sessionId: String) { _requests.tryEmit(Request.ShowSession(sessionId)) }
 
     fun prefillComposer(text: String) { _requests.tryEmit(Request.PrefillComposer(text)) }
+
+    fun showSessionAndSend(sessionId: String, text: String) {
+        _requests.tryEmit(Request.ShowSessionAndSend(sessionId, text))
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun handled() { _requests.resetReplayCache() }

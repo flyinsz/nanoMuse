@@ -1151,7 +1151,9 @@ const zhCN: Record<string, string> = {
   "Sign in and use its model": "登录并使用它的模型",
   "Signed in to nanoMuse Cloud.": "已登录 nanoMuse Cloud。",
   "Or bring your own key": "或者用你自己的密钥",
-  "This device": "这台设备",
+  // "This device" also labels the device being held in the strip above the composer, where the
+  // slot is a few characters wide — "本机" fits both readings.
+  "This device": "本机",
   "A name your other devices will see": "其他设备看到的名字",
   "On the hub": "已连上中继",
   "Reachable by your other devices while this runs.": "运行期间，你的其他设备可以找到它。",

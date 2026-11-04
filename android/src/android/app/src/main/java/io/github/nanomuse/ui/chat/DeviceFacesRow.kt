@@ -37,18 +37,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.openminis.app.R
 import io.github.nanomuse.reach.Computers
 
 /**
  * How wide one device's slot is, whatever its disc does: the strip is laid out on fixed slots so
- * a device can grow without shifting the ones beside it.
+ * a device can grow without shifting the ones beside it. Narrow enough that a row of them still
+ * reads as a row rather than as a wall: the disc is 46dp at most, and the slot only adds what the
+ * name under it needs on either side.
  */
-private val SLOT = 74.dp
+private val SLOT = 58.dp
 
 /**
  * The account's devices as a strip just above the box: one round disc per device, the one whose
@@ -128,7 +132,10 @@ fun nmDeviceFaces(
                                 else MaterialTheme.colorScheme.surfaceVariant,
                             )
                             .border(
-                                width = if (here) 2.dp else 1.dp,
+                                // One weight for both states, as the console draws it: what marks
+                                // the device in front is the colour and the tint, not a heavier
+                                // ring, which at phone density reads as a drawn-on outline.
+                                width = 1.dp,
                                 color = if (here) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.outlineVariant,
                                 shape = CircleShape,
@@ -145,7 +152,11 @@ fun nmDeviceFaces(
                     }
                 }
                 Text(
-                    text = d.name,
+                    // The device being held wears the account's name for it, which is the same
+                    // name every other device of the account wears, so under its own disc that
+                    // name says nothing. "This device" is what the person knows it by, and it is
+                    // the word the console uses for the same disc.
+                    text = if (d.isThis) stringResource(R.string.nm_device_this) else d.name,
                     fontSize = if (here) 10.sp else 9.sp,
                     lineHeight = 12.sp,
                     maxLines = 2,

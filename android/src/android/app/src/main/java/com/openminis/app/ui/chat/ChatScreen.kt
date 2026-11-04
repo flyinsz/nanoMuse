@@ -539,6 +539,13 @@ fun ChatScreen(
     // nanoMuse: height of the floating pill bar overlaying the bottom. The
     // composer sits above it; the message list slides behind it for the blur.
     nmBottomOverlay: androidx.compose.ui.unit.Dp = 0.dp,
+    // nanoMuse: a message addressed to another device, waiting for this chat to be the one on
+    // screen. `sessionId` of the pair is this chat's id by the time it arrives here, so the text
+    // is handed to the ViewModel that owns this chat and the reply lands in this history rather
+    // than in whichever chat the message happened to be typed in (nmSendToDevice).
+    nmOnDeviceSend: Pair<String, String>? = null,
+    /** Called once [nmOnDeviceSend] has been taken, so the shell does not send it twice. */
+    nmOnDeviceSent: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -2325,6 +2332,24 @@ fun ChatScreen(
                 AppLogger.debug(tagScroll, "focus request skipped: ${e.message}")
             }
         }
+    }
+    // nanoMuse: a message addressed to another device, sent here because this is the chat that
+    // device keeps with this phone. The shell shows this chat and hands the text over; the line
+    // and the device's answers are written by this chat's ViewModel, so they belong to this
+    // history (nmSendToDevice decided the destination, DeviceChat made the chat).
+    LaunchedEffect(viewModel, nmOnDeviceSend) {
+        val (want, text) = nmOnDeviceSend ?: return@LaunchedEffect
+        if (want != sessionId) return@LaunchedEffect
+        val hubId = io.github.nanomuse.terminal.DeviceChat.deviceOf(context, want)
+        val device = hubId?.let { id ->
+            io.github.nanomuse.terminal.DeviceStrip
+                .others(io.github.nanomuse.hub.Hub.devices.value)
+                .firstOrNull { it.hubId == id }
+        }
+        // The delivery runs on the ViewModel's own scope, so it outlives this effect; clearing the
+        // request afterwards is what stops a recomposition from sending the same text twice.
+        if (device != null) viewModel.nmDeliverToDevice(want, device, text)
+        nmOnDeviceSent()
     }
 
     // Show top-level error in snackbar (only for errors without an assistant message)

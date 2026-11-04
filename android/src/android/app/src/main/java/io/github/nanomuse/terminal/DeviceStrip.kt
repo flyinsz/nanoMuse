@@ -166,5 +166,8 @@ object DeviceStrip {
         kind = d.kind,
         online = d.online,
         lastSeen = d.lastSeen,
+        // the face of the phone being held wears "This device" rather than the account's name
+        // for it (see DeviceFacesRow), which is why the flag has to survive this mapping
+        isThis = d.isThis,
     )
 }

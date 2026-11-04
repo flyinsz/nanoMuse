@@ -1203,4 +1203,5 @@
     <string name="nm_device_stopped">已停止，并且通知了 %1$s 结束这次任务。</string>
     <string name="nm_device_chat_title">→ %1$s</string>
     <string name="nm_device_offline_now">%1$s 现在没有连接。</string>
+    <!-- The device strip's label for the device being held (nm_device_this). -->    <string name="nm_device_this">本机</string>
 </resources>

@@ -37,6 +37,55 @@ object DeviceChat {
     }
 
     /**
+     * The hub id of the device [sessionId] is the chat of, or null when it is not a device's
+     * chat: the mapping read backwards. A chat and its device cannot disagree about each other
+     * ([remember] writes both), so this is the same fact the aim holds and the header draws.
+     */
+    fun deviceOf(context: Context, sessionId: String): String? {
+        if (sessionId.isBlank()) return null
+        val prefix = "hub.session.to-"
+        return prefs(context).all.entries
+            .firstOrNull { (k, v) -> k.startsWith(prefix) && v == sessionId }
+            ?.key
+            ?.removePrefix(prefix)
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * The chat this phone keeps with [device], making it when there is none: what tapping a
+     * device's face opens, and where a message addressed to that device goes.
+     *
+     * [seedModel] is what a chat that has to be made is created on — the model the person is
+     * talking to right now. Null when there is no model to seed with, in which case a chat that
+     * does not exist yet cannot be made either.
+     *
+     * The two halves live together because both callers need the same order: reuse what exists,
+     * else make one and remember it. Splitting them is how a tap and a send could end up with a
+     * chat each. An existing chat is re-aimed here as well: a chat of a device is *aimed* at it
+     * (the invariant [remember] writes), so a chat whose aim went missing is put back in step
+     * rather than sending the next message to the wrong place.
+     */
+    suspend fun ensure(
+        context: Context,
+        repo: ChatRepository,
+        device: Computers.Computer,
+        seedModel: String?,
+        memoryEnabled: Boolean,
+    ): String? {
+        existing(context, repo, device)?.let { id ->
+            DeviceAim.set(context, id, device.hubId)
+            return id
+        }
+        if (seedModel.isNullOrBlank()) return null
+        val title = context.getString(com.openminis.app.R.string.nm_device_chat_title, device.name)
+        val made = runCatching {
+            repo.createSession(modelId = seedModel, title = title, memoryEnabled = memoryEnabled)
+        }.getOrNull() ?: return null
+        remember(context, device, made.id)
+        return made.id
+    }
+
+    /**
      * Records the chat made for [device], so the next tap returns to it rather than making
      * another. Aimed at the same moment: the chat exists in order to talk to that device, so
      * the two facts are written together and cannot drift.

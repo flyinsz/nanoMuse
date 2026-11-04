@@ -28,6 +28,10 @@ object Computers {
         val kind: String = "computer",
         val online: Boolean = true,
         val lastSeen: Long = 0L,
+        // nanoMuse: whether this is the very device being held. The relay marks it (`this`); the
+        // device strip draws that one's name as "This device" rather than the account's name for
+        // it, which is the same on every device and so says nothing about which disc is this one.
+        val isThis: Boolean = false,
     ) {
         val address: String get() = "hub"
     }

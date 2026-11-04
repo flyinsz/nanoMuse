@@ -6404,8 +6404,53 @@ class ChatViewModel(
         if (asked.isBlank()) return false
         val device = aimed
         viewModelScope.launch {
+            // The message belongs in the chat this phone keeps with [device], not in whichever
+            // chat it was typed in: a device's answers, its steps and the questions it asks are
+            // all about that one device, and leaving them in the open chat reads as this phone's
+            // own Muse having done the work (io.github.nanomuse.terminal.DeviceChat). The console
+            // and iOS do the same, and the person watches the message arrive where its answer
+            // will be. The chat is made the first time, exactly as a tap on the device's face
+            // makes it, so a tap and a send land in the same place.
+            val target = io.github.nanomuse.terminal.DeviceChat.ensure(
+                context = context,
+                repo = chatRepository,
+                device = device,
+                seedModel = currentModel?.id
+                    ?: providerRepository.config.value.modelGroups
+                        .firstOrNull()?.let { g -> providerRepository.availableMemberEntries(g).firstOrNull()?.model?.id }
+                    ?: providerRepository.allVisibleEntries().firstOrNull()?.baseModel?.id,
+                memoryEnabled = _memoryEnabled.value,
+            ) ?: run {
+                // No chat to send into (no device chat could be made): say so here rather than
+                // swallow the message. The device's own chat is where it would have gone.
+                appendSystemInfo(
+                    text = context.getString(R.string.nm_device_offline_now, device.name),
+                    iconKind = "device",
+                )
+                return@launch
+            }
+            if (target == sid) {
+                // Already in that device's chat (the open aim): nothing to move, send as before.
+                nmDeliverToDevice(target, device, asked)
+                return@launch
+            }
+            // Show the device's chat and hand the message to it. It goes through the home shell
+            // rather than being sent here because the text is about to be carried by *that*
+            // chat's ViewModel, which is the one whose history the reply belongs in.
+            io.github.nanomuse.ui.home.HomeBus.showSessionAndSend(target, asked)
+        }
+        return true
+    }
+
+    /**
+     * Sends [asked] to [device] and writes both the person's line and the device's answers into
+     * [targetSid]. Called on the ViewModel that owns that chat, so the row, the agent history and
+     * the streaming state all belong to one place.
+     */
+    internal fun nmDeliverToDevice(targetSid: String, device: io.github.nanomuse.reach.Computers.Computer, asked: String) {
+        viewModelScope.launch {
             // the person's line first, without the mention, exactly as typed after "@name"
-            nmAppendUserLine(sid, asked)
+            nmAppendUserLine(targetSid, asked)
             // The steps arrive on the hub's own thread and the bubble is written from here, so
             // they are queued as they come and drawn between the two suspends below.
             val steps = java.util.concurrent.LinkedBlockingQueue<String>()
@@ -6415,7 +6460,7 @@ class ChatViewModel(
                     device = device,
                     conversation = device.hubId,
                     text = asked,
-                    sessionId = sid,
+                    sessionId = targetSid,
                     language = nmUiLanguage(),
                     onStep = { step ->
                         val line = when (step) {
@@ -6431,7 +6476,7 @@ class ChatViewModel(
             }
             while (true) {
                 val line = steps.poll() ?: break
-                nmAppendAssistantLine(sid, line)
+                nmAppendAssistantLine(targetSid, line)
             }
             val said = when (outcome) {
                 is io.github.nanomuse.terminal.RemoteTaskController.Outcome.Answered -> outcome.text
@@ -6440,9 +6485,8 @@ class ChatViewModel(
                 io.github.nanomuse.terminal.RemoteTaskController.Outcome.Stopped ->
                     context.getString(R.string.nm_device_stopped, device.name)
             }
-            nmAppendAssistantLine(sid, said)
+            nmAppendAssistantLine(targetSid, said)
         }
-        return true
     }
 
     /** This phone's screens as a BCP-47 tag, so that device's Muse answers in it. */

@@ -188,4 +188,21 @@ class DeviceStripTest {
         assertNull(DeviceStrip.afterAt("look at mac"))
         assertNull(DeviceStrip.afterAt("foo@bar.com"))
     }
+
+    // ── which device is this one ─────────────────────────────────────────────────────
+
+    @Test
+    fun the_relays_this_marks_survive_as_the_row_is_built() {
+        // The face of the device being held says "This device" rather than the account's name for
+        // it, which is the same on every device — so the flag has to reach the view, and the
+        // mapping from the relay's Device to a Computer is where it could be dropped.
+        val mine = DeviceStrip.muses(devices).single { it.hubId == "phone-1" }
+        assertTrue(mine.isThis)
+    }
+
+    @Test
+    fun the_other_muses_are_not_marked_as_this_one() {
+        val others = DeviceStrip.muses(devices).filter { it.hubId != "phone-1" }
+        assertTrue(others.none { it.isThis })
+    }
 }

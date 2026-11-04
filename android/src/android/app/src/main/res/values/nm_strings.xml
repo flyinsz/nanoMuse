@@ -1210,4 +1210,7 @@
     <string name="nm_device_stopped">Stopped. %1$s was told to end it.</string>
     <string name="nm_device_chat_title">→ %1$s</string>
     <string name="nm_device_offline_now">%1$s is not connected right now.</string>
+    <!-- The device strip's label for the phone being held. It wears the account's name, which
+         every device of the account wears, so under its own disc that name says nothing. -->
+    <string name="nm_device_this">This device</string>
 </resources>

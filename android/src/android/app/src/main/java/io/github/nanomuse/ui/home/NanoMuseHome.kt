@@ -159,6 +159,9 @@ fun NanoMuseHome(
 
     // Requests from cards inside messages, idea sheets, etc.
     var pendingPrefill by remember { mutableStateOf<String?>(null) }
+    // A message addressed to another device: show that device's chat, then send into it once the
+    // chat it names is the one on screen (its ViewModel is the one that must carry the text).
+    var pendingDeviceSend by remember { mutableStateOf<Pair<String, String>?>(null) }
     LaunchedEffect(Unit) {
         HomeBus.requests.collect { req ->
             when (req) {
@@ -168,10 +171,17 @@ fun NanoMuseHome(
                     showMain()
                     pendingPrefill = req.text
                 }
+                is HomeBus.Request.ShowSessionAndSend -> {
+                    showSession(req.sessionId)
+                    pendingDeviceSend = req.sessionId to req.text
+                }
             }
             HomeBus.handled()
         }
     }
+    // A message addressed to another device is handed to that chat's ChatScreen below, which is
+    // where the ViewModel that owns the chat lives (see nmDeviceSend on ChatScreen).
+    val deviceSend = if (pendingDeviceSend?.first == chatSessionId) pendingDeviceSend else null
 
     // First run. Until the app has a model to talk to, the home is Muse's welcome screen with
     // the three steps (provider → its models → the first conversation), not a chat that cannot
@@ -429,6 +439,10 @@ fun NanoMuseHome(
                             // nanoMuse: preserve the full-size blur source, but keep
                             // the chat footer above the bar measured by Scaffold.
                             nmBottomOverlay = bottom,
+                            // nanoMuse: a message addressed to another device, sent the moment
+                            // this chat is the one on screen (nmDeviceSend below).
+                            nmOnDeviceSend = deviceSend,
+                            nmOnDeviceSent = { pendingDeviceSend = null },
                         )
                     }
                 }
