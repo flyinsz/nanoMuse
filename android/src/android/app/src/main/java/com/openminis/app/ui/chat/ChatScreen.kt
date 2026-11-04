@@ -5493,6 +5493,20 @@ fun ChatScreen(
                 // activates the keyboard instead. Box wraps the existing
                 // composer Column so the gesture + overlay live in the same
                 // coordinate space without disturbing the bar's own layout.
+                // nanoMuse: the account's devices as a row of avatars above the box, the one
+                // this chat is aimed at drawn larger (io.github.nanomuse.ui.chat.nmDeviceStripRow).
+                // Above the swipe Box rather than inside it, so a drag on an avatar is not read
+                // as a swipe-to-send. Tapping one aims the chat at that device; tapping the
+                // aimed one again lets it go.
+                val nmAimed by viewModel.nmAimedDevice.collectAsState()
+                io.github.nanomuse.ui.chat.nmDeviceStripRow(
+                    sessionId = viewModel.realSessionId.ifEmpty { viewModel.sessionId },
+                    aimedId = nmAimed,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = nmComposerHorizontalInset, vertical = 2.dp),
+                    onAim = { viewModel.nmAimAt(if (it == null || it.hubId == nmAimed) null else it.hubId) },
+                )
                 Box(modifier = Modifier
                     .fillMaxWidth()
                     .pointerInput(Unit) {

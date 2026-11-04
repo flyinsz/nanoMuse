@@ -3428,6 +3428,43 @@ class ChatViewModel(
     /** The real session ID (same as sessionId for existing sessions, generated on first message for drafts). */
     internal var realSessionId: String = if (isDraft) "" else sessionId
 
+    // nanoMuse: which device this chat is aimed at, from the avatars above the box
+    // (io.github.nanomuse.terminal.DeviceAim keeps it; this is the copy the strip draws from).
+    // An aimed chat sends a message that names nobody to that device, which is what the tap
+    // is for. Empty means this phone's own Muse, which is what every chat was before this.
+    private val _nmAimedDevice = MutableStateFlow("")
+    val nmAimedDevice: StateFlow<String> = _nmAimedDevice.asStateFlow()
+
+    /** Aim this chat at [hubId], or at nothing with null; called by the device strip. */
+    fun nmAimAt(hubId: String?) {
+        // A draft has no real id yet, and `sessionId` is what it will be renamed from, so the
+        // aim is kept under whichever id this chat answers to now and moved on promotion
+        // (nmMoveAim).
+        val sid = realSessionId.ifEmpty { sessionId }
+        if (sid.isBlank()) return
+        _nmAimedDevice.value =
+            io.github.nanomuse.terminal.DeviceAim.set(context, sid, hubId) ?: ""
+    }
+
+    /** The aim as stored, read when a chat is opened so the strip draws the right avatar large. */
+    internal fun nmLoadAim() {
+        val sid = realSessionId.ifEmpty { sessionId }
+        _nmAimedDevice.value =
+            if (sid.isBlank()) "" else io.github.nanomuse.terminal.DeviceAim.id(context, sid) ?: ""
+    }
+
+    /**
+     * Carry an aim from a draft's id to the real one the moment the chat is promoted, so a
+     * device picked before the first message still holds afterwards.
+     */
+    internal fun nmMoveAim(from: String, to: String) {
+        if (from.isBlank() || to.isBlank() || from == to) return
+        val aimed = io.github.nanomuse.terminal.DeviceAim.id(context, from) ?: return
+        io.github.nanomuse.terminal.DeviceAim.set(context, to, aimed)
+        io.github.nanomuse.terminal.DeviceAim.set(context, from, null)
+        _nmAimedDevice.value = aimed
+    }
+
     // nanoMuse: the first conversation — scripted opening, "what should I call
     // you?", then the name chooser. Logic lives in io.github.nanomuse.onboarding;
     // this VM only seeds the virtual messages, intercepts the name, and appends
@@ -3784,6 +3821,7 @@ class ChatViewModel(
         // sessionId so re-entering the session reuses the same instance.
         if (isDraft) {
             ChatViewModelStore.rename(sessionId, session.id)
+            nmMoveAim(from = sessionId, to = session.id) // nanoMuse: a device picked on the draft still holds
             nmFirstConversation.rebind(fromDraft = sessionId, toReal = session.id) // nanoMuse
             // nanoMuse: the home shell's main chat may have been this draft;
             // prompt addenda (goal creation etc.) follow the id too.
@@ -3903,6 +3941,7 @@ class ChatViewModel(
 
     private fun loadSession() {
         _nmContinueAsk.value = null // nanoMuse: the "continue?" card belongs to the session that hit the ceiling
+        nmLoadAim() // nanoMuse: the device this chat was aimed at, so the strip draws the right avatar large
         // T-android-crash-detected-halt: when CrashFrequencyDetector
         // tripped (#459, ≥3 crashes in last hour), skip the heavy
         // session-restore path entirely. Re-running the same persisted
@@ -6302,11 +6341,26 @@ class ChatViewModel(
     // the model. True when the message was taken: it is then handled entirely here.
 
     private fun nmSendToDevice(text: String): Boolean {
-        if (!text.trimStart().startsWith("@")) return false
+        // nanoMuse: a chat can be aimed at a device by tapping its avatar above the box, so a
+        // message that names nobody also goes there — that is what the tap is for
+        // (io.github.nanomuse.terminal.DeviceAim). A message that names a device goes to that
+        // one instead; one whose `@` names nobody falls back to the aim, and one that is only
+        // an `@` is nothing to send, so it takes the ordinary path.
         val sid = realSessionId.ifEmpty { sessionId }
-        val hit = io.github.nanomuse.terminal.DeviceTargetMention.parse(context, text) ?: return false
-        val device = hit.device
-        val asked = hit.text
+        val mentioned = io.github.nanomuse.terminal.DeviceTargetMention.parse(context, text)
+        val aimed = io.github.nanomuse.terminal.DeviceAim.target(
+            context = context,
+            sessionId = sid,
+            text = text,
+            known = io.github.nanomuse.terminal.DeviceStrip.aims(
+                io.github.nanomuse.terminal.DeviceStrip.devices(io.github.nanomuse.hub.Hub.devices.value),
+            ),
+        ) ?: return false
+        // What is said to the device: the words after the mention, or the whole message when
+        // there was no mention (the aim carried it).
+        val asked = (mentioned?.text ?: text).trim()
+        if (asked.isBlank()) return false
+        val device = aimed
         viewModelScope.launch {
             // the person's line first, without the mention, exactly as typed after "@name"
             nmAppendUserLine(sid, asked)

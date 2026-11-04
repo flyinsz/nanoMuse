@@ -3,6 +3,7 @@ package io.github.nanomuse.terminal
 import com.openminis.app.data.FileMentionIndex
 import io.github.nanomuse.hub.Device
 import io.github.nanomuse.hub.Hub
+import io.github.nanomuse.reach.Computers
 
 /**
  * The account's other devices, as the chat draws them twice over: the strip of avatars above
@@ -30,6 +31,26 @@ object DeviceStrip {
     /** This phone and any browser tab are left out: neither can take a task. */
     fun devices(all: List<Device>): List<Device> =
         all.filter { it.name.isNotBlank() && it.kind != "web" }
+
+    /**
+     * The devices the strip draws, as the chat's own type: this phone and browser tabs aside,
+     * the online ones by name and then the offline ones. The same list [DeviceAim] resolves an
+     * aim against, so the avatar that looks aimed is the one a message goes to.
+     */
+    fun aims(all: List<Device>): List<Computers.Computer> =
+        devices(all)
+            .sortedWith(compareBy({ if (it.online) 0 else 1 }, { it.name.lowercase() }))
+            .map { d ->
+                Computers.Computer(
+                    id = "hub:" + d.id,
+                    name = d.name,
+                    os = d.os,
+                    hubId = d.id,
+                    kind = d.kind,
+                    online = d.online,
+                    lastSeen = d.lastSeen,
+                )
+            }
 
     /**
      * The devices the strip lists, in the order it draws them: the one the open chat is
