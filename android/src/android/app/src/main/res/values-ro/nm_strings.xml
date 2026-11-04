@@ -1236,4 +1236,17 @@
     <string name="nm_device_offline_now">%1$s is not connected right now.</string>
     <!-- The device strip's label for the device being held (nm_device_this). -->    <string name="nm_device_this">Acest dispozitiv</string>
     <string name="nm_device_has_news">Mesaje noi</string>
+    <string name="nm_remote_ambiguous">Se potrivesc mai multe dispozitive. Alege din Cont → Dispozitive.</string>
+    <string name="nm_remote_attachments">Mențiunile dispozitivelor trimit doar text. Elimină atașamentele înainte de trimitere.</string>
+    <string name="nm_remote_no_answer">%1$s a terminat fără răspuns.</string>
+    <string name="nm_remote_failed">%1$s nu a răspuns: %2$s</string>
+    <string name="nm_remote_offline">%1$s este offline.</string>
+    <string name="nm_remote_chat_busy">Așteaptă încheierea acestei conversații înainte să trimiți o sarcină unui dispozitiv.</string>
+
+    <string name="nm_reply_unread">Răspuns necitit</string>
+    <string name="nm_restore_recovered">Restaurarea întreruptă a fost recuperată. Dacă recuperarea eșuează, datele se păstrează pentru o nouă încercare.</string>
+    <string name="nm_restore_recovery_failed">Recuperarea a eșuat. Datele de recuperare au fost păstrate. Repornește aplicația pentru a reîncerca.</string>
+    <string name="nm_backup_resume">Reia copia</string>
+    <string name="nm_backup_discard">Renunță la copia întreruptă</string>
+    <string name="nm_backup_resume_hint">Există o copie întreruptă. Reia cu opțiunile originale și introdu din nou parola dacă este necesar, sau renunță pentru a începe din nou.</string>
 </resources>

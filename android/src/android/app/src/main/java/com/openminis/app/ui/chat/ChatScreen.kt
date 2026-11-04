@@ -1,5 +1,8 @@
 package com.openminis.app.ui.chat
 
+// nanoMuse: equipment rows reuse the file mention picker.
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Smartphone
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -546,6 +549,8 @@ fun ChatScreen(
     nmOnDeviceSend: Pair<String, String>? = null,
     /** Called once [nmOnDeviceSend] has been taken, so the shell does not send it twice. */
     nmOnDeviceSent: () -> Unit = {},
+    // nanoMuse: retained Muse tabs must not mark their hidden conversation as read.
+    nmConversationVisible: Boolean = true,
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -567,6 +572,9 @@ fun ChatScreen(
             mcpRepository = mcpRepository,
         ),
     )
+    // nanoMuse: one lifecycle-aware presence hook for Muse and classic, including draft promotion.
+    val nmDisplayedSessionId by viewModel.displayedSessionId.collectAsState()
+    io.github.nanomuse.ui.chat.ReplyPresenceEffect(nmDisplayedSessionId, nmConversationVisible)
     // [T-android-larky-longsession-followup] Consume the tail-windowed
     // view instead of the canonical full list. For sessions with ≤300
     // messages this is the SAME reference (zero overhead); for longer
@@ -5428,7 +5436,7 @@ fun ChatScreen(
                                         )
                                         .verticalScrollbar(mentionListState),
                                 ) {
-                                    itemsIndexed(mentionEntries, key = { _, e -> e.rowKey }) { i, entry -> // nanoMuse: a device row keys by its id, two devices may share a name
+                                    itemsIndexed(mentionEntries, key = { _, e -> e.nmDevice?.let { "device:${it.id}" } ?: e.linuxPath }) { i, entry ->
                                         val isSelected = i == mentionSelectedIndex
                                         Row(
                                             modifier = Modifier
@@ -5465,11 +5473,8 @@ fun ChatScreen(
                                             // is not mistaken for a file (docs/hub.md); the
                                             // name comes from the row's own badge.
                                             Icon(
-                                                imageVector = if (entry.mountName == io.github.nanomuse.terminal.DeviceStrip.DEVICE_BADGE) {
-                                                    Icons.Default.PhoneAndroid
-                                                } else {
-                                                    Icons.Default.Description
-                                                },
+                                                // nanoMuse: distinguish equipment from file entries.
+                                                imageVector = entry.nmDevice?.let { if (it.isPhone) Icons.Default.Smartphone else Icons.Default.Computer } ?: Icons.Default.Description,
                                                 contentDescription = null,
                                                 tint = ChatColors.secondaryText,
                                                 modifier = Modifier.size(16.dp),
@@ -5477,7 +5482,7 @@ fun ChatScreen(
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    text = entry.basename,
+                                                    text = entry.nmDevice?.name ?: entry.basename, // nanoMuse
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.Medium,
                                                     color = ChatColors.primaryText,
@@ -5485,7 +5490,7 @@ fun ChatScreen(
                                                     overflow = TextOverflow.Ellipsis,
                                                 )
                                                 Text(
-                                                    text = entry.displayPath,
+                                                    text = entry.nmDevice?.let { listOf(it.os, stringResource(R.string.nm_profile_online), it.id).filter(String::isNotBlank).joinToString(" · ") } ?: entry.displayPath, // nanoMuse
                                                     fontSize = 11.sp,
                                                     color = ChatColors.secondaryText,
                                                     maxLines = 1,
@@ -5495,7 +5500,7 @@ fun ChatScreen(
                                             Spacer(modifier = Modifier.width(6.dp))
                                             // Scope / mount badge — matches iOS capsule.
                                             Text(
-                                                text = entry.mountName ?: entry.scope.displayLabel,
+                                                text = if (entry.nmDevice != null) stringResource(R.string.nm_devices_title) else entry.mountName ?: entry.scope.displayLabel, // nanoMuse
                                                 fontSize = 10.sp,
                                                 fontWeight = FontWeight.Medium,
                                                 color = ChatColors.secondaryText,

@@ -75,24 +75,11 @@ class FileMentionIndex(
         val mountName: String?,
         val modifiedAt: Long,
         val isDirectory: Boolean,
-        // nanoMuse: what this row says about the device it offers, or null for a file. Its
-        // presence is what makes the row a device: the picker draws another icon for it and
-        // shows this line instead of the path. One of the account's devices rather than a
-        // file on this phone, offered by the same `@` menu (docs/hub.md; iOS does the same
-        // in NanoMuseDeviceMention.menuEntries).
-        val nmDeviceDetail: String? = null,
-        // nanoMuse: the identity of the row, which a device row cannot take from its path: two
-        // devices of one account may perfectly well share a name (two phones of the same model,
-        // say), and the picker's list needs a key that is unique per row. A file's path is
-        // already unique, so only a device passes one.
-        val nmKey: String? = null,
+        // nanoMuse: device rows reuse the picker's selection and keyboard path.
+        val nmDevice: io.github.nanomuse.hub.Device? = null,
     ) {
         val basename: String get() = linuxPath.substringAfterLast('/').ifEmpty { linuxPath }
-        // nanoMuse: a device's row says what the device is (its system, whether it is up)
-        // rather than repeating the name the row already shows.
-        val displayPath: String get() = nmDeviceDetail ?: linuxPath.removePrefix("/var/minis/")
-        // nanoMuse: what the picker keys its rows by — the device's own id where there is one.
-        val rowKey: String get() = nmKey ?: linuxPath
+        val displayPath: String get() = linuxPath.removePrefix("/var/minis/")
     }
 
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())

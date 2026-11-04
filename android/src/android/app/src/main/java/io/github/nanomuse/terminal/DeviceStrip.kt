@@ -1,24 +1,19 @@
 package io.github.nanomuse.terminal
 
-import com.openminis.app.data.FileMentionIndex
 import io.github.nanomuse.hub.Device
-import io.github.nanomuse.hub.Hub
 import io.github.nanomuse.reach.Computers
 
 /**
- * The account's Muses, as the chat draws them twice over: the row of faces in the header, and
- * the devices the `@` picker offers above the files it already lists.
- *
- * Why both. The mention is a reading of what was typed, so it can only offer a device whose
- * name the person already knows and can spell; Android's picker listed files alone before this,
- * so a device could only be reached by typing its name exactly, which is the whole cost of the
- * feature on a phone. The faces say who is there at a glance, in one tap; the picker says it
- * while a name is being typed. They answer the same question and must not disagree, so the rule
- * lives here once.
+ * The account's Muses as the chat draws them: the row of faces above the box, this phone's own
+ * among them.
  *
  * The devices are the hub's own list, not `Computers.hubDevices`: that one answers "where may a
  * command go right now" and keeps only what is online, while the faces have to show the
  * sleeping ones too (faint) for the person to know why a tap on them would not go anywhere.
+ *
+ * What the `@` picker offers is not here: since the upstream merge the device rows of the menu
+ * are built by `io.github.nanomuse.sync.DeviceMentionMenu`, which reads the leading `@` and the
+ * caret and qualifies duplicate names with their ids.
  */
 object DeviceStrip {
     /**
@@ -135,47 +130,6 @@ object DeviceStrip {
         if (!body.startsWith("@")) return null
         return body.substring(1)
     }
-
-    /**
-     * The devices as rows of the `@` picker, above the files it already lists. The row's
-     * `linuxPath` is the device's name, so picking it writes `@<name> ` — exactly what
-     * [DeviceTargetMention.reading] reads back when the message is sent, which is how the picker
-     * and the send stay in step without either knowing about the other.
-     *
-     * The badge says "device" (`mountName`), so the row reads as one of the account's computers
-     * or phones rather than a folder; the second line is the system and whether the device is up
-     * (the same pair the computers panel shows), the row's title being the name already.
-     */
-    fun entries(
-        context: android.content.Context,
-        filter: String,
-        limit: Int = 6,
-    ): List<FileMentionIndex.Entry> {
-        val up = context.getString(com.openminis.app.R.string.nm_pc_online)
-        val down = context.getString(com.openminis.app.R.string.nm_pc_offline)
-        return suggestions(others(Hub.devices.value), filter, limit).map { d ->
-            FileMentionIndex.Entry(
-                linuxPath = d.name,
-                scope = FileMentionIndex.Scope.MOUNT,
-                mountName = DEVICE_BADGE,
-                modifiedAt = d.lastSeen,
-                isDirectory = false,
-                nmDeviceDetail = listOf(d.os, if (d.online) up else down)
-                    .filter { it.isNotBlank() }
-                    .joinToString(" · "),
-                // the picker's key: two devices of one account may share a name, and a repeated
-                // key in a list is a crash, not a cosmetic flaw
-                nmKey = "device:" + d.hubId,
-            )
-        }
-    }
-
-    /**
-     * The badge the picker's device rows carry, so the view can tell them from files and draw a
-     * device icon instead of the document one. English and lower case like the scope labels
-     * beside it ("skills", "workspace").
-     */
-    const val DEVICE_BADGE = "device"
 
     private fun asComputer(d: Device) = Computers.Computer(
         id = "hub:" + d.id,

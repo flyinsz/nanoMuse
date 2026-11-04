@@ -1232,4 +1232,17 @@
     <string name="nm_device_offline_now">%1$s is not connected right now.</string>
     <!-- The device strip's label for the device being held (nm_device_this). -->    <string name="nm_device_this">Dieses Gerät</string>
     <string name="nm_device_has_news">Neue Nachrichten</string>
+    <string name="nm_remote_ambiguous">Mehrere Geräte passen. Wähle ein Gerät unter Konto → Geräte.</string>
+    <string name="nm_remote_attachments">Geräteerwähnungen senden nur Text. Entferne vor dem Senden die Anhänge.</string>
+    <string name="nm_remote_no_answer">%1$s wurde ohne Antwort beendet.</string>
+    <string name="nm_remote_failed">%1$s hat nicht geantwortet: %2$s</string>
+    <string name="nm_remote_offline">%1$s ist offline.</string>
+    <string name="nm_remote_chat_busy">Warte, bis diese Unterhaltung fertig ist, bevor du eine Geräteaufgabe sendest.</string>
+
+    <string name="nm_reply_unread">Ungelesene Antwort</string>
+    <string name="nm_restore_recovered">Die unterbrochene Wiederherstellung wurde zurückgesetzt. Bei einem Fehler bleiben die Wiederherstellungsdaten für einen weiteren Versuch erhalten.</string>
+    <string name="nm_restore_recovery_failed">Die Wiederherstellung ist fehlgeschlagen. Die Wiederherstellungsdaten bleiben erhalten. App zum erneuten Versuch neu starten.</string>
+    <string name="nm_backup_resume">Sicherung fortsetzen</string>
+    <string name="nm_backup_discard">Unterbrochene Sicherung verwerfen</string>
+    <string name="nm_backup_resume_hint">Eine unterbrochene Sicherung wartet. Mit den ursprünglichen Optionen fortsetzen und bei Bedarf das Verschlüsselungspasswort erneut eingeben, oder verwerfen und neu beginnen.</string>
 </resources>

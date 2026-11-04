@@ -1228,4 +1228,17 @@
     <string name="nm_device_offline_now">%1$s is not connected right now.</string>
     <!-- The device strip's label for the device being held (nm_device_this). -->    <string name="nm_device_this">อุปกรณ์นี้</string>
     <string name="nm_device_has_news">ข้อความใหม่</string>
+    <string name="nm_remote_ambiguous">พบอุปกรณ์ที่ตรงกันมากกว่าหนึ่งเครื่อง เลือกในบัญชี → อุปกรณ์</string>
+    <string name="nm_remote_attachments">การกล่าวถึงอุปกรณ์ส่งได้เฉพาะข้อความ โปรดนำไฟล์แนบออกก่อนส่ง</string>
+    <string name="nm_remote_no_answer">%1$s ทำงานเสร็จโดยไม่มีคำตอบ</string>
+    <string name="nm_remote_failed">%1$s ไม่ตอบกลับ: %2$s</string>
+    <string name="nm_remote_offline">%1$s ออฟไลน์อยู่</string>
+    <string name="nm_remote_chat_busy">รอให้การสนทนานี้ทำงานเสร็จก่อนส่งงานไปยังอุปกรณ์</string>
+
+    <string name="nm_reply_unread">คำตอบที่ยังไม่ได้อ่าน</string>
+    <string name="nm_restore_recovered">กู้คืนการคืนค่าที่ขัดจังหวะแล้ว หากกู้คืนไม่สำเร็จ จะเก็บข้อมูลการกู้คืนไว้เพื่อลองอีกครั้ง</string>
+    <string name="nm_restore_recovery_failed">กู้คืนไม่สำเร็จ เก็บข้อมูลการกู้คืนไว้แล้ว เริ่มแอปใหม่เพื่อลองอีกครั้ง</string>
+    <string name="nm_backup_resume">สำรองข้อมูลต่อ</string>
+    <string name="nm_backup_discard">ทิ้งการสำรองข้อมูลที่ขัดจังหวะ</string>
+    <string name="nm_backup_resume_hint">มีการสำรองข้อมูลที่ขัดจังหวะอยู่ ดำเนินการต่อด้วยตัวเลือกเดิมและป้อนรหัสผ่านอีกครั้งหากจำเป็น หรือทิ้งเพื่อเริ่มใหม่</string>
 </resources>

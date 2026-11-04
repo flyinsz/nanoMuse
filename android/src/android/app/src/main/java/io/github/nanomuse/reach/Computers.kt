@@ -132,7 +132,7 @@ object Computers {
             c,
             "task",
             JSONObject().put("text", text).put("from", Hub.name(context)).put("language", uiLanguage(context)),
-            timeoutMs = 10 * 60_000L,
+            timeoutMs = io.github.nanomuse.hub.HubClient.TASK_TIMEOUT_MS,
             onEvent = onEvent,
         )
 

@@ -444,6 +444,7 @@ fun NanoMuseHome(
                             // this chat is the one on screen (nmDeviceSend below).
                             nmOnDeviceSend = deviceSend,
                             nmOnDeviceSent = { pendingDeviceSend = null },
+                            nmConversationVisible = chatVisible,
                         )
                     }
                 }
