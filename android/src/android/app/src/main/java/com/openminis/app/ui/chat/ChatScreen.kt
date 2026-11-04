@@ -5560,6 +5560,14 @@ fun ChatScreen(
                 }
                 val nmSessions by chatRepository.observeSessions()
                     .collectAsState(initial = emptyList())
+                // The chats that arrived on this phone from another device — a task this phone's
+                // Muse ran for one (`From <device>`). They belong to no device's face, so they are
+                // what the phone's own face carries (io.github.nanomuse.terminal.DeviceInbox).
+                // Keyed on the session list because that is what changes when one arrives: the
+                // stored ids alone would be read once and never again.
+                val nmIncomingIds = remember(nmSessions) {
+                    io.github.nanomuse.terminal.DeviceInbox.incoming(context).toSet()
+                }
                 // A device chat that has moved on since the last time it was read here. The
                 // session's own last-write time is weighed against this phone's own record of
                 // having read it (DeviceNews) — so this is about what has been read *here*, not
@@ -5571,8 +5579,17 @@ fun ChatScreen(
                 // empty and the stored marks are what survives a restart.
                 io.github.nanomuse.terminal.DeviceNews.load(context)
                 val nmSeenMarks by io.github.nanomuse.terminal.DeviceNews.marks.collectAsState()
-                val nmNewsDevices = remember(nmSessions, nmSeenMarks, nmOtherIds) {
-                    nmSessions.mapNotNull { s ->
+                // Two kinds of news, and they land on different faces.
+                //
+                // A device's face is marked when the chat this phone keeps *with* that device has
+                // moved on since it was last read here — a reply to something this phone asked.
+                // The phone's own face is marked when a chat that arrived from another device
+                // (`From <device>`, a task this phone's Muse ran for one) has not been read. The
+                // second is not a chat with a device and so has no face of its own; this phone is
+                // the device it belongs to, and tapping that face opens the newest one still to
+                // read (nmOpenDeviceChat).
+                val nmNewsDevices = remember(nmSessions, nmSeenMarks, nmOtherIds, nmIncomingIds) {
+                    val mine = nmSessions.mapNotNull { s ->
                         val hubId = io.github.nanomuse.terminal.DeviceChat.deviceOf(context, s.id)
                             ?: return@mapNotNull null
                         hubId.takeIf {
@@ -5583,6 +5600,20 @@ fun ChatScreen(
                                 )
                         }
                     }.toSet()
+                    // the phone's own face: marked while any chat that arrived from another device
+                    // is unread, which is exactly when a tap on it opens one of them. Marked beside
+                    // the device faces, not instead of them: two different devices can have news at
+                    // once and both marks are true.
+                    val thisId = io.github.nanomuse.terminal.DeviceStrip.muses(nmHubDevices)
+                        .firstOrNull { it.isThis }?.hubId
+                    val inbound = nmSessions.any { s ->
+                        s.id in nmIncomingIds &&
+                            io.github.nanomuse.terminal.DeviceNews.unread(
+                                s.updatedAt,
+                                nmSeenMarks[s.id] ?: 0L,
+                            )
+                    }
+                    if (inbound && thisId != null) mine + thisId else mine
                 }
                 io.github.nanomuse.ui.chat.nmDeviceFaces(
                     devices = io.github.nanomuse.terminal.DeviceStrip.muses(

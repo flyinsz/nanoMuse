@@ -22,7 +22,7 @@ import { Loader2, Monitor, Smartphone } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
 import { useT } from "../i18n";
-import { centringScroll, focusedFace, hasNews, muses, type DeviceFace } from "../device-strip";
+import { centringScroll, focusedFace, hasNews, muses, newestUnreadIncoming, type DeviceFace } from "../device-strip";
 import type { HubDevice } from "../types";
 import { api } from "../api";
 import { cx } from "../util";
@@ -199,6 +199,10 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
   // the person is looking at is always up to date (ChatScreen marks it seen when it opens and
   // again as it grows), so this never marks the one in front of them.
   const newsOf = (f: DeviceFace): boolean => {
+    // This device's own face carries the chats that arrived *from* another device, which belong to
+    // no device's face (newestUnreadIncoming): the mark has to stand exactly when a tap on the
+    // face would open one of them, or a dotted face would lead to the main chat.
+    if (f.device.this) return newestUnreadIncoming(state.threads, state.threadSeen) !== null;
     if (!f.thread) return false;
     return hasNews(state.threads.find((th) => th.id === f.thread), state.threadSeen[f.thread]);
   };
@@ -214,7 +218,11 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
       // so asking for this one answered 404 "no device matches". Returning to "main" is what the
       // strip's own face means, and what picking it did before there was a strip at all.
       if (d.this) {
-        dispatch({ type: "activeThread", thread: "main" });
+        // Unless something arrived from another device and has not been read: this device's own
+        // face wears the dot for those, so a tap opens the newest one rather than leading away
+        // from the mark. Reading it clears the mark, and the next tap finds the next one.
+        const inbox = newestUnreadIncoming(state.threads, state.threadSeen);
+        dispatch({ type: "activeThread", thread: inbox ?? "main" });
         return;
       }
       if (!d.online) {
@@ -233,7 +241,7 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
         toast((e as Error).message);
       }
     },
-    [dispatch, t, toast],
+    [dispatch, t, toast, state.threads, state.threadSeen],
   );
 
   if (row.length === 0) return null;

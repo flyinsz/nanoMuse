@@ -101,6 +101,41 @@ export function hasNews(
 }
 
 /**
+ * The chat this device's own face opens: the most recently written of the chats that *arrived*
+ * from another device, when one of them holds something unread, or null for the main chat.
+ *
+ * A task another device hands this device runs in a chat of its own, and the runtime marks it
+ * `remote_from` (a chat another device opened here with a `task`). It belongs to no device's face —
+ * the faces are the account's devices, and a chat that came *from* one is not a chat *with* one —
+ * so this device's own face is the only place that can say "another device sent you something",
+ * and the only thing a tap on it can open.
+ *
+ * "Most recently written" rather than "oldest": the newest arrival is the one a person picking up
+ * their phone is looking for, and reading it leaves the older ones for the next tap. With none
+ * unread the face means the main chat again, which is its usual meaning.
+ *
+ * `updated_at` and the remembered moment are the runtime's own ISO strings, so comparing them as
+ * text is comparing them as times — the same comparison `hasNews` makes for a device's chat.
+ */
+export function newestUnreadIncoming(
+  threads: readonly { id: string; updated_at?: string; remote_from?: unknown }[],
+  seenAt: Record<string, string | undefined>,
+): string | null {
+  let best: string | null = null;
+  let bestAt = "";
+  for (const th of threads) {
+    if (!th.remote_from) continue;
+    const at = th.updated_at;
+    if (!hasNews(th, seenAt[th.id])) continue;
+    if (best === null || (at ?? "") > bestAt) {
+      best = th.id;
+      bestAt = at ?? "";
+    }
+  }
+  return best;
+}
+
+/**
  * How far the strip must scroll to put a face in the middle of its box, from measurements the
  * caller takes.
  *

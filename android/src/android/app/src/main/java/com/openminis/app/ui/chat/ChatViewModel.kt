@@ -3496,12 +3496,26 @@ class ChatViewModel(
         // the same way (web/src/components/DeviceFaces.tsx), and the runtime has nothing to open
         // for this case either — its `hub_ask` resolves a device through the list of the *other*
         // ones, so asking for this phone answers "no device matches".
+        //
+        // Unless something arrived here unread. A task another device hands this phone is a real
+        // chat of this phone's (`From <device>`, HubActions.sessionFor) and the face wears the dot
+        // for it, so a tap on a dotted face opens that chat rather than the main one; reading it
+        // clears the dot, and the next tap finds the next one still to read
+        // (io.github.nanomuse.terminal.DeviceInbox). Only once nothing is left unread does the
+        // face mean the main chat again, which is its usual meaning.
         if (device.isThis) {
             // The face of the phone is drawn large by the strip itself once this chat is the one
             // shown (nmDeviceFaces resolves a blank aim to this phone), so nothing is cleared
             // here: the aim belongs to the chat being left, and clearing it would bring the
             // device chat back un-aimed the next time it is opened.
-            io.github.nanomuse.ui.home.HomeBus.showMain()
+            viewModelScope.launch {
+                val inbox = io.github.nanomuse.terminal.DeviceInbox.newestUnread(
+                    candidates = nmIncomingChats(),
+                    seenAt = { id -> io.github.nanomuse.terminal.DeviceNews.seenAt(context, id) },
+                )
+                if (inbox != null) io.github.nanomuse.ui.home.HomeBus.showSession(inbox)
+                else io.github.nanomuse.ui.home.HomeBus.showMain()
+            }
             return
         }
         if (!device.online) {
@@ -3535,6 +3549,22 @@ class ChatViewModel(
             io.github.nanomuse.ui.home.HomeBus.showSession(made.id)
         }
     }
+
+    /**
+     * The chats that arrived on this phone from another device, each with the time it was last
+     * written: what the phone's own face consults to know where a tap should land
+     * (io.github.nanomuse.terminal.DeviceInbox).
+     *
+     * The last-write time comes from the session row rather than from the stored mapping, because
+     * it is the same number [DeviceNews] weighs against the read mark — the dot and the tap have
+     * to answer from one set of facts or a dotted face could open a chat that reads as already
+     * read. A chat whose row is gone (deleted here) is left out: the face cannot open it either.
+     */
+    private suspend fun nmIncomingChats(): List<Pair<String, Long>> =
+        io.github.nanomuse.terminal.DeviceInbox.incoming(context).mapNotNull { id ->
+            runCatching { chatRepository.dao.getSession(id) }.getOrNull()
+                ?.let { id to it.updatedAt }
+        }
 
     // nanoMuse: the first conversation — scripted opening, "what should I call
     // you?", then the name chooser. Logic lives in io.github.nanomuse.onboarding;

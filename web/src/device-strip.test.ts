@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centringScroll, focusedFace, hasNews, muses } from "./device-strip";
+import { centringScroll, focusedFace, hasNews, muses, newestUnreadIncoming } from "./device-strip";
 import type { HubDevice } from "./types";
 
 /**
@@ -116,6 +116,42 @@ describe("hasNews", () => {
   it("does not mark a chat with no timestamp to compare", () => {
     expect(hasNews({}, undefined)).toBe(false);
     expect(hasNews({ updated_at: "" }, undefined)).toBe(false);
+  });
+});
+
+/**
+ * What this device's own face opens. A chat that arrived from another device belongs to no
+ * device's face, so the face wears the dot for it and a tap has to open it — otherwise the mark
+ * points at a chat nobody can reach from it — and only once nothing is left unread does the face
+ * mean the main chat again.
+ */
+describe("newestUnreadIncoming", () => {
+  const arrived = (id: string, at: string) => ({ id, updated_at: at, remote_from: { device: "d", name: "d", kind: "computer", conversation: "c" } });
+
+  it("chooses the newest of several unread arrivals", () => {
+    const threads = [arrived("old", "2026-11-04T09:00:00Z"), arrived("new", "2026-11-04T11:00:00Z")];
+    expect(newestUnreadIncoming(threads, {})).toBe("new");
+  });
+
+  it("passes over a chat that arrived here but was read", () => {
+    const threads = [arrived("read", "2026-11-04T11:00:00Z"), arrived("unread", "2026-11-04T09:00:00Z")];
+    expect(newestUnreadIncoming(threads, { read: "2026-11-04T11:00:00Z" })).toBe("unread");
+  });
+
+  it("falls back to the main chat when nothing arrived unread", () => {
+    expect(newestUnreadIncoming([arrived("a", "2026-11-04T11:00:00Z")], { a: "2026-11-04T11:00:00Z" })).toBeNull();
+    expect(newestUnreadIncoming([], {})).toBeNull();
+  });
+
+  it("ignores a chat this device started itself", () => {
+    // a chat with no `remote_from` is this device's own, and its face is not the one carrying it
+    const own = { id: "own", updated_at: "2026-11-04T11:00:00Z" };
+    expect(newestUnreadIncoming([own], {})).toBeNull();
+  });
+
+  it("leaves an older unread arrival for the next tap after the newest is read", () => {
+    const threads = [arrived("old", "2026-11-04T09:00:00Z"), arrived("new", "2026-11-04T11:00:00Z")];
+    expect(newestUnreadIncoming(threads, { new: "2026-11-04T11:00:00Z" })).toBe("old");
   });
 });
 
