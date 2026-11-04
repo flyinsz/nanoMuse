@@ -11,6 +11,11 @@ import org.junit.Test
  * place that can say so. The rule has to hold in both directions: it must mark a chat the person
  * has never opened and one that moved on since they last read it, and it must not mark the chat
  * they are reading right now — a dot on the thing in front of them says nothing.
+ *
+ * The mark is read from [DeviceNews.marks] rather than from the preference behind it, because
+ * reading a chat has to *clear* the dot the moment it happens. A preference on its own tells a
+ * Compose reader nothing — nothing invalidates when one changes — so a mark written there and
+ * read back would leave the dot standing over a chat that had just been read.
  */
 class DeviceNewsTest {
     private val ten = 1_700_000_000_000L

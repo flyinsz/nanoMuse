@@ -577,6 +577,18 @@ fun ChatScreen(
     val messages by viewModel.uiMessages.collectAsState()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsState()
     val isStreaming by viewModel.isStreaming.collectAsState()
+    // nanoMuse: the chat on screen is being read, so it is kept marked read as it grows — a reply
+    // that lands while it is open must not leave a dot on the chat the person is looking at. The
+    // mark is written against the session's own last-write time, so this is the same rule the
+    // strip applies, only kept current here rather than once on the way in (nmLoadAim does that
+    // half). Keyed on the last message so it re-runs when one arrives, not on every recomposition.
+    val nmLastMessage = remember(messages) { messages.lastOrNull()?.id }
+    LaunchedEffect(sessionId, nmLastMessage, viewModel.activeSessionId) {
+        val sid = viewModel.activeSessionId.takeIf { it.isNotBlank() } ?: sessionId
+        if (sid.isBlank()) return@LaunchedEffect
+        val at = runCatching { chatRepository.dao.getSession(sid)?.updatedAt }.getOrNull()
+        if (at != null) io.github.nanomuse.terminal.DeviceNews.markSeen(context, sid, at)
+    }
     // nanoMuse: the screen stays on while the agent drives the browser or another app's screen.
     io.github.nanomuse.status.KeepAwake.Effect(isStreaming)
     val canResume by viewModel.canResume.collectAsState()
@@ -5535,12 +5547,19 @@ fun ChatScreen(
                 // session's own last-write time is weighed against this phone's own record of
                 // having read it (DeviceNews) — so this is about what has been read *here*, not
                 // about the account, and the face and the chat's row in the drawer agree.
-                val nmNewsDevices = remember(nmSessions) {
+                //
+                // `marks` is collected as well as read: reading a chat writes a mark, and without
+                // something observable to invalidate this the dot would stand over a chat the
+                // person had just finished reading. Loaded in first, because the flow starts
+                // empty and the stored marks are what survives a restart.
+                io.github.nanomuse.terminal.DeviceNews.load(context)
+                val nmSeenMarks by io.github.nanomuse.terminal.DeviceNews.marks.collectAsState()
+                val nmNewsDevices = remember(nmSessions, nmSeenMarks) {
                     nmSessions.mapNotNull { s ->
                         io.github.nanomuse.terminal.DeviceChat.deviceOf(context, s.id)?.takeIf {
                             io.github.nanomuse.terminal.DeviceNews.unread(
                                 s.updatedAt,
-                                io.github.nanomuse.terminal.DeviceNews.seenAt(context, s.id),
+                                nmSeenMarks[s.id] ?: 0L,
                             )
                         }
                     }.toSet()
@@ -5550,11 +5569,11 @@ fun ChatScreen(
                         io.github.nanomuse.hub.Hub.devices.collectAsState().value,
                     ),
                     focusedId = nmFaces,
-                    // 46dp read as a button being held down rather than one of a row: the disc
-                    // is the same *idea* as the console's 46px, but at phone density with a 58dp
-                    // slot beside it, it filled the strip. 40dp leaves the gap the console has
-                    // and keeps the idle discs legible at their 28dp.
-                    focusedSize = 40.dp,
+                    // 46dp read as a button being held down rather than one of a row, so it came
+                    // down to 40dp; a nudge back up to 42dp, which keeps the gap the console has
+                    // beside a 58dp slot while making the face in front read as the one in front
+                    // (its idle neighbours are 28dp).
+                    focusedSize = 42.dp,
                     idleSize = 28.dp,
                     newsIds = nmNewsDevices,
                     modifier = Modifier.padding(

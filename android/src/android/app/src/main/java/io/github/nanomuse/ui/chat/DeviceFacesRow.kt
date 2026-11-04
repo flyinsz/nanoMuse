@@ -57,6 +57,16 @@ import io.github.nanomuse.reach.Computers
 private val SLOT = 58.dp
 
 /**
+ * The dot a device's face wears when its chat has something unread.
+ *
+ * The same green the app already uses for "this is up and well" (the coding list's running dot,
+ * the goals' tracking tick), so a mark that means "there is something waiting for you" reads the
+ * same wherever it is met. Material's own `primary` is the accent blue, which is what the *device
+ * in front* is drawn in — a blue dot beside a blue ring said nothing at a glance.
+ */
+private val MuseNewsGreen = androidx.compose.ui.graphics.Color(0xFF34C759)
+
+/**
  * The focused device the strip was last fitted to, or null before the first fit. Outside the
  * composition because a tap rebuilds the strip (see [nmDeviceFaces]); inside it, the flag would
  * reset on every tap and no roll would ever animate.
@@ -189,31 +199,35 @@ fun nmDeviceFaces(
                     // A turn under way on that device reads here too, not just in its own chat:
                     // the strip is where the person sees who is doing what without opening each
                     // one. A dot is for news the person has not read — a reply that arrived in a
-                    // chat nobody was looking at, which is the whole reason to leave one. The
-                    // spinner wins when both would show: work under way is the more urgent of the
-                    // two and the only one that clears itself.
+                    // chat nobody was looking at, which is the whole reason to leave one.
+                    //
+                    // Both sit at the disc's bottom-right corner, clear of the name under it, and
+                    // the spinner wins when both would show: work under way is the more urgent of
+                    // the two and the only one that clears itself. Green for the dot, which is
+                    // what "something is waiting for you" already wears on the goals and in the
+                    // coding list.
                     val busy = d.hubId in busyIds
                     when {
                         busy -> Box(
                             Modifier
-                                .align(Alignment.TopEnd)
-                                .size(14.dp)
+                                .align(Alignment.BottomEnd)
+                                .size(11.dp)
                                 .clip(CircleShape)
                                 .background(MaterialTheme.colorScheme.surface),
                             contentAlignment = Alignment.Center,
                         ) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(9.dp),
-                                strokeWidth = 1.5.dp,
+                                modifier = Modifier.size(7.dp),
+                                strokeWidth = 1.2.dp,
                                 color = MaterialTheme.colorScheme.primary,
                             )
                         }
                         d.hubId in newsIds -> Box(
                             Modifier
-                                .align(Alignment.TopEnd)
-                                .size(9.dp)
+                                .align(Alignment.BottomEnd)
+                                .size(7.dp)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
+                                .background(MuseNewsGreen)
                                 .semantics { contentDescription = newsLabel },
                         )
                     }

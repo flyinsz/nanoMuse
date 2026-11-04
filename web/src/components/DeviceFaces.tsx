@@ -73,20 +73,23 @@ function Face({
           {d.kind === "phone" ? <Smartphone size={22} /> : <Monitor size={22} />}
         </span>
         {/* A turn under way on that device reads here too, not just in its own chat: the strip is
-            where the person sees who is doing what without opening each one. Drawn on the disc's
-            own corner rather than the slot's, so it rides the disc as it grows. */}
+            where the person sees who is doing what without opening each one. Drawn at the disc's
+            bottom-right corner rather than the slot's, so it rides the disc as it grows and sits
+            clear of the name under it. */}
         {busy && (
-          <span className="absolute right-1 top-0 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-bg bg-bg">
-            <Loader2 size={10} className="animate-spin text-accent" />
+          <span className="absolute bottom-0 right-1 z-10 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-bg bg-bg">
+            <Loader2 size={9} className="animate-spin text-accent" />
           </span>
         )}
-        {/* Something arrived in that device's chat while it was not being read. Drawn where the
-            spinner is not, so the two cannot sit on top of each other: work under way is the
-            more urgent of the two and the one that disappears on its own. */}
+        {/* Something arrived in that device's chat while it was not being read. Same corner as
+            the spinner, so the two never sit on top of each other; the spinner is drawn instead
+            of this one when a turn is under way, being the more urgent of the two and the only
+            one that clears itself. Green, which is what "there is something waiting for you"
+            already wears in the drawer and on the goals. */}
         {news && !busy && (
           <span
             aria-label={t("New messages")}
-            className="absolute right-1 top-0 z-10 h-2.5 w-2.5 rounded-full border border-bg bg-accent"
+            className="absolute bottom-0 right-1 z-10 h-2 w-2 rounded-full border border-bg bg-emerald-500"
           />
         )}
       </span>
