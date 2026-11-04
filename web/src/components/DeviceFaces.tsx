@@ -19,10 +19,11 @@
  * person's, and a tap says so rather than opening a chat that cannot answer.
  */
 import { Monitor, Smartphone } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
 import { useT } from "../i18n";
 import { centringScroll, faceRow, type DeviceFace } from "../device-strip";
+import type { HubDevice } from "../types";
 import { api } from "../api";
 import { cx } from "../util";
 
@@ -92,7 +93,31 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
   const t = useT();
   const strip = useRef<HTMLDivElement>(null);
 
-  const row = faceRow(state.hub?.devices ?? [], { chatDevice, threads: state.threads });
+  // The runtime's view keeps this device apart from the others: `device` is this runtime, and
+  // `devices` is the relay's list of the *other* devices of the account, which never includes
+  // this one. The strip is the account's Muses, so this device belongs in the row — put in
+  // first and marked, which is what `muses` reads. Without this the row drew only the other
+  // devices, this page's own face was missing, and "the middle" fell back to nothing whenever
+  // no device's chat was open.
+  const everyone = useMemo<HubDevice[]>(() => {
+    const self = state.hub?.device;
+    const others = state.hub?.devices ?? [];
+    if (!self?.id) return others;
+    if (others.some((d) => d.id === self.id)) return others;
+    return [{ id: self.id, name: self.name, kind: self.kind, online: true, this: true }, ...others];
+  }, [state.hub?.device, state.hub?.devices]);
+
+  const row = faceRow(everyone, { chatDevice, threads: state.threads });
+
+  // Extracted so the effect's dependency list is three plain values eslint can check.
+  const middleId = row.middle?.device.id ?? "";
+  const sideCount = row.left.length + row.right.length;
+
+  // Bumped on every pick, so the roll below runs even when the *middle* does not change. That
+  // is the ordinary case: picking the device already in the middle, or picking this page's own
+  // face while it is already the middle one, moves the strip nowhere else and would otherwise
+  // leave the effect's dependencies untouched and the roll unfired.
+  const [pick, setPick] = useState(0);
 
   // Roll the device whose chat is open to the middle of the strip. The first fit lands it
   // without a scroll so a chat that opens on a device does not slide under the reader's eyes;
@@ -109,11 +134,13 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
     if (!box) return;
     const el = box.querySelector<HTMLElement>('[aria-current="true"]');
     if (!el) return;
-    // a roll to a *different* device animates; the first fit (nothing remembered) and a
-    // re-render that lands on the device already in the middle both stay still
-    const id = row.middle?.device.id ?? "";
-    const moved = lastFocused !== undefined && lastFocused !== id;
-    lastFocused = id;
+    // The very first fit lands without scrolling — a chat that opens on a device should not
+    // slide under the reader's eyes. Everything after that rolls, including a pick of the device
+    // already in the middle (that is what `pick` is for): a tap should always be answered by
+    // the strip moving, and "it is already centred" is only true of where it sits, not of the
+    // fact that the person just asked for it.
+    const first = lastFocused === undefined;
+    lastFocused = middleId;
     const b = box.getBoundingClientRect();
     const f = el.getBoundingClientRect();
     const left = centringScroll({
@@ -124,12 +151,25 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
       scrollLeft: box.scrollLeft,
       contentWidth: box.scrollWidth,
     });
-    box.scrollTo({ left, behavior: moved ? "smooth" : "auto" });
-  }, [row.middle?.device.id]);
+    box.scrollTo({ left, behavior: first ? "auto" : "smooth" });
+    // `pick` is what makes a pick of the device already in the middle roll too; the other two
+    // cover the row itself changing (a device appears or leaves, or the chat's device changes)
+  }, [middleId, sideCount, pick]);
 
   const open = useCallback(
     async (face: DeviceFace) => {
       const d = face.device;
+      // every pick asks the strip to roll, whether or not the middle ends up elsewhere
+      setPick((n) => n + 1);
+      // The device being held is this page's own Muse, which is the main chat — not a chat
+      // *with* it. `POST /api/hub/ask` cannot open one either: the runtime's `hub_ask` resolves
+      // the device through `hub.device`/`hub.find`, and both look only at the *other* devices,
+      // so asking for this one answered 404 "no device matches". Returning to "main" is what the
+      // strip's own face means, and what picking it did before there was a strip at all.
+      if (d.this) {
+        dispatch({ type: "activeThread", thread: "main" });
+        return;
+      }
       if (!d.online) {
         toast(t("{device} is not connected right now.", { device: d.name }));
         return;

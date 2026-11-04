@@ -105,13 +105,14 @@ fun nmDeviceFaces(
     // up and go down, and an index would read a reorder as a pick and roll the strip by itself.
     LaunchedEffect(middle, devices.size, viewport) {
         if (viewport == 0 || middle < 0) return@LaunchedEffect
-        val known = nmLastFocusedDevice
-        // a roll to a *different* device animates; the first fit (nothing remembered) and a
-        // recomposition that lands on the device already centred both stay still. The console
-        // answers the same way (web/src/components/DeviceFaces.tsx), so the two do not drift.
-        val moved = known != null && known != focusedId
+        // The very first fit lands without animating — a chat that opens on a device should not
+        // slide under the reader's eyes. Every fit after that rolls, including one that lands on
+        // the device already centred: a tap should always be answered by the strip moving. The
+        // console answers the same way (web/src/components/DeviceFaces.tsx), so the two do not
+        // drift.
+        val first = nmLastFocusedDevice == null
         nmLastFocusedDevice = focusedId
-        if (moved) list.animateScrollToItem(middle) else list.scrollToItem(middle)
+        if (first) list.scrollToItem(middle) else list.animateScrollToItem(middle)
     }
 
     LazyRow(
@@ -164,7 +165,9 @@ fun nmDeviceFaces(
                             contentDescription = d.name,
                             tint = if (here) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(if (here) 22.dp else 15.dp),
+                            // 19dp inside a 40dp disc, the same proportion the console draws
+                            // (22px inside 46px) — the glyph was filling its ring at 22dp
+                            modifier = Modifier.size(if (here) 19.dp else 15.dp),
                         )
                     }
                 }

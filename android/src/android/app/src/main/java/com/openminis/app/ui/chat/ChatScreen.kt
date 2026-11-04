@@ -5529,7 +5529,11 @@ fun ChatScreen(
                         io.github.nanomuse.hub.Hub.devices.collectAsState().value,
                     ),
                     focusedId = nmFaces,
-                    focusedSize = 46.dp,
+                    // 46dp read as a button being held down rather than one of a row: the disc
+                    // is the same *idea* as the console's 46px, but at phone density with a 58dp
+                    // slot beside it, it filled the strip. 40dp leaves the gap the console has
+                    // and keeps the idle discs legible at their 28dp.
+                    focusedSize = 40.dp,
                     idleSize = 28.dp,
                     modifier = Modifier.padding(
                         horizontal = nmComposerHorizontalInset,

@@ -175,6 +175,7 @@ fun NanoMuseHome(
                     showSession(req.sessionId)
                     pendingDeviceSend = req.sessionId to req.text
                 }
+                HomeBus.Request.ShowMain -> showMain()
             }
             HomeBus.handled()
         }

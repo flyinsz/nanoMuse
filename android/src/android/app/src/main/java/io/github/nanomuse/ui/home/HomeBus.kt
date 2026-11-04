@@ -28,6 +28,13 @@ object HomeBus {
          * person watches it arrive in the right place rather than being told it went.
          */
         data class ShowSessionAndSend(val sessionId: String, val text: String) : Request()
+        /**
+         * Show the main chat: what picking this phone's own face in the device strip does. The
+         * main chat *is* this phone's Muse, so there is no chat to make "with" it — and asking
+         * the runtime for one would answer "no device matches", since it resolves a device
+         * through its list of the *other* ones.
+         */
+        data object ShowMain : Request()
     }
 
     private val _requests = MutableSharedFlow<Request>(replay = 1, extraBufferCapacity = 8)
@@ -42,6 +49,8 @@ object HomeBus {
     fun showSessionAndSend(sessionId: String, text: String) {
         _requests.tryEmit(Request.ShowSessionAndSend(sessionId, text))
     }
+
+    fun showMain() { _requests.tryEmit(Request.ShowMain) }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun handled() { _requests.resetReplayCache() }

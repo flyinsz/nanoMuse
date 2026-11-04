@@ -3477,6 +3477,15 @@ class ChatViewModel(
      * not up yet picks the request up when it is.
      */
     fun nmOpenDeviceChat(device: io.github.nanomuse.reach.Computers.Computer) {
+        // The phone's own face is the main chat, not a chat *with* the phone: this phone's Muse
+        // is the main chat's Muse, and there is no second one to talk to. The console reads it
+        // the same way (web/src/components/DeviceFaces.tsx), and the runtime has nothing to open
+        // for this case either — its `hub_ask` resolves a device through the list of the *other*
+        // ones, so asking for this phone answers "no device matches".
+        if (device.isThis) {
+            io.github.nanomuse.ui.home.HomeBus.showMain()
+            return
+        }
         if (!device.online) {
             // said here, in the chat that is open, rather than by opening the device's own chat
             // to find it empty: a device that is asleep is not a place to be taken to
