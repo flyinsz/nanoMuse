@@ -22,7 +22,7 @@ import { Monitor, Smartphone } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { useStore } from "../store";
 import { useT } from "../i18n";
-import { faceRow, type DeviceFace } from "../device-strip";
+import { centringScroll, faceRow, type DeviceFace } from "../device-strip";
 import { api } from "../api";
 import { cx } from "../util";
 
@@ -79,6 +79,14 @@ function Face({
   );
 }
 
+/**
+ * The device the strip was last fitted to, or undefined before the first fit. Kept outside the
+ * component on purpose: a tap opens another chat, which rebuilds the composer subtree and with
+ * it this component, so a ref inside would be born fresh on every tap and every roll would be
+ * treated as a first fit and land without animating — which is exactly the bug this fixes.
+ */
+let lastFocused: string | undefined;
+
 export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
   const { state, dispatch, toast } = useStore();
   const t = useT();
@@ -90,21 +98,33 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
   // without a scroll so a chat that opens on a device does not slide under the reader's eyes;
   // every pick after that animates.
   //
-  // `scrollIntoView({ inline: "center" })` is not used: with the trailing slack spans the strip
-  // is wider than its box, and the browser's "centre" is computed against the nearest scrollable
-  // ancestor in ways that differ between engines — the strip sometimes did not move at all. The
-  // offset is worked out here instead, from the face's own geometry, so the roll happens the
-  // same way in every browser and matches Android's `animateScrollToItem`.
-  const landed = useRef(false);
+  // The distance comes from `centringScroll` (src/device-strip.ts), which works from the two
+  // boxes' screens coordinates: neither `scrollIntoView({ inline: "center" })` nor
+  // `element.offsetLeft` is right here — the first resolves "centre" against the nearest
+  // scrollable ancestor differently in every engine, the second is measured from the offset
+  // parent, which a flex row does not establish. The rule lives there so it can be checked
+  // without a browser, which is what the two earlier attempts at this were not.
   useEffect(() => {
     const box = strip.current;
     if (!box) return;
     const el = box.querySelector<HTMLElement>('[aria-current="true"]');
     if (!el) return;
-    const still = !landed.current;
-    landed.current = true;
-    const left = el.offsetLeft - (box.clientWidth - el.offsetWidth) / 2;
-    box.scrollTo({ left, behavior: still ? "auto" : "smooth" });
+    // a roll to a *different* device animates; the first fit (nothing remembered) and a
+    // re-render that lands on the device already in the middle both stay still
+    const id = row.middle?.device.id ?? "";
+    const moved = lastFocused !== undefined && lastFocused !== id;
+    lastFocused = id;
+    const b = box.getBoundingClientRect();
+    const f = el.getBoundingClientRect();
+    const left = centringScroll({
+      boxLeft: b.left,
+      boxWidth: box.clientWidth,
+      faceLeft: f.left,
+      faceWidth: el.offsetWidth,
+      scrollLeft: box.scrollLeft,
+      contentWidth: box.scrollWidth,
+    });
+    box.scrollTo({ left, behavior: moved ? "smooth" : "auto" });
   }, [row.middle?.device.id]);
 
   const open = useCallback(
@@ -147,8 +167,14 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
       aria-label={t("Your devices")}
       style={{ scrollbarWidth: "none" }}
     >
-      {/* half a strip of slack on each end, so the first and the last device can reach the middle */}
-      <span aria-hidden className="w-[40vw] shrink-0" />
+      {/* Half a strip of slack on each end, so the first and the last device can reach the
+          middle too. It is half the strip rather than a fixed slice of the viewport: two 40vw
+          ends left only 20vw of room for the devices to overflow into, so on a wide window with
+          a few devices the strip never overflowed at all and "roll to the middle" had nothing to
+          scroll — which is why the console never rolled while the phone always did (there the
+          slack is `(viewport - slot) / 2` and the content is always wider than its box). At half
+          the width the same is true here, and the roll is the same gesture on both. */}
+      <span aria-hidden className="w-1/2 shrink-0" />
       {[...row.left, ...(row.middle ? [row.middle] : []), ...row.right].map((f) => (
         <Face
           key={f.device.id}
@@ -159,7 +185,7 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
           name={name(f)}
         />
       ))}
-      <span aria-hidden className="w-[40vw] shrink-0" />
+      <span aria-hidden className="w-1/2 shrink-0" />
     </div>
   );
 }

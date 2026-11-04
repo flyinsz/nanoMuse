@@ -101,7 +101,12 @@ object Hub {
             key = key,
             hello = { hello(app) },
             onCall = { call -> HubActions.handle(app, call) },
-            onDevices = { list -> _devices.value = list },
+            // nanoMuse: the relay's `devices` frame does not carry `this` — that field is put on
+            // the list by the *runtime* when this phone asks it over HTTP (nanomuse/hub/service.py,
+            // `d["this"] = d.get("id") == self.device_id`), so a phone reading the raw frame saw
+            // every entry as somebody else's and drew no face of its own in the strip. This end
+            // knows its own id, so it marks the entry here, once, for every reader.
+            onDevices = { list -> _devices.value = markThis(app, list) },
             onState = { on, detail -> _connected.value = on; _detail.value = detail },
             onProfile = { frame -> io.github.nanomuse.cloud.ProfileSync.onFrame(app, frame) },
             onSync = { frame -> io.github.nanomuse.sync.ConversationSync.onFrame(app, frame) },
@@ -127,6 +132,17 @@ object Hub {
     fun restart(context: Context) {
         stop(context)
         autoStart(context)
+    }
+
+    /**
+     * The relay's list with this phone's own entry marked: `this` as the runtime marks it when a
+     * device asks over HTTP, so a reader gets the same answer either way. The frame carries no
+     * such field — the relay does not know which of the entries is the phone reading it — so it
+     * is put on here, from the id this end joined with.
+     */
+    private fun markThis(context: Context, list: List<Device>): List<Device> {
+        val me = deviceId(context)
+        return list.map { if (it.id == me) it.copy(isThis = true) else it }
     }
 
     private fun hello(context: Context): JSONObject = JSONObject()

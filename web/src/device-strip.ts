@@ -90,3 +90,40 @@ export function faceRow(
   const half = Math.ceil(rest.length / 2);
   return { middle, left: rest.slice(0, half), right: rest.slice(half) };
 }
+
+/**
+ * How far the strip must scroll to put a face in the middle of its box, from measurements the
+ * caller takes.
+ *
+ * The layout is not consulted, and neither is `offsetLeft`: the strip is a flex row, which does
+ * not establish an offset parent, so `offsetLeft` is measured from something outside it and the
+ * answer drifts with the page. Every box here is what `getBoundingClientRect` reports, so the
+ * same numbers come back in any browser and in a test with nothing rendered.
+ *
+ * - `boxLeft` / `boxWidth` — the scroll box, on screen and its visible width (`clientWidth`).
+ * - `faceLeft` / `faceWidth` — the face to centre, likewise. Both rectangles include the box's
+ *   current scroll, which is why it is taken back out below.
+ * - `scrollLeft` — the box's current scroll, so the face's place in the *content* can be had
+ *   rather than where it happens to sit on screen right now.
+ *
+ * The clamp is what the element's own `scrollTo` would do anyway; doing it here keeps the return
+ * value honest (a test can say "this rolls to the end" and mean it) and keeps the first fit from
+ * asking for a negative scroll.
+ */
+export function centringScroll(input: {
+  boxLeft: number;
+  boxWidth: number;
+  faceLeft: number;
+  faceWidth: number;
+  scrollLeft: number;
+  contentWidth: number;
+}): number {
+  const { boxLeft, boxWidth, faceLeft, faceWidth, scrollLeft, contentWidth } = input;
+  // the box's left edge measures where the *content* is scrolled to, so taking the scroll back
+  // out gives the face's own place in the content, on screen or not
+  const contentStart = boxLeft - scrollLeft;
+  const faceOffset = faceLeft - contentStart;
+  const wanted = faceOffset - (boxWidth - faceWidth) / 2;
+  const max = Math.max(0, contentWidth - boxWidth);
+  return Math.min(Math.max(wanted, 0), max);
+}

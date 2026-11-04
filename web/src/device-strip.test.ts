@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { faceRow, muses } from "./device-strip";
+import { centringScroll, faceRow, muses } from "./device-strip";
 import type { HubDevice } from "./types";
 
 /**
@@ -85,5 +85,64 @@ describe("faceRow", () => {
     const row = faceRow([]);
     expect(row.middle).toBeNull();
     expect(row.left.length + row.right.length).toBe(0);
+  });
+});
+
+/**
+ * Where the strip scrolls to put a face in the middle. The rule was wrong twice — first as
+ * `scrollIntoView({ inline: "center" })`, which each engine resolves differently, then as
+ * `element.offsetLeft`, which a flex row measures from outside itself — so it lives here, where
+ * it can be checked without a browser, and the cases below are the ones those two got wrong.
+ */
+describe("centringScroll", () => {
+  /** A 900px-wide box, scrolled to 0: the shape the strip has the first time it opens. */
+  const box = { boxLeft: 100, boxWidth: 900, scrollLeft: 0 };
+
+  it("centres a face in the middle of the box", () => {
+    // a face 800px into the content, 58 wide: to centre it the content must move left by
+    // 800 - (900 - 58) / 2 = 379
+    const left = centringScroll({ ...box, faceLeft: 900, faceWidth: 58, contentWidth: 2000 });
+    expect(left).toBe(379);
+  });
+
+  it("accounts for where the box is already scrolled", () => {
+    // the same face, seen after the strip has already rolled 379: it now sits on screen at
+    // 900 - 379, and the answer must not depend on that — it is the same place in the content
+    const left = centringScroll({
+      boxLeft: 100,
+      boxWidth: 900,
+      scrollLeft: 379,
+      faceLeft: 900 - 379,
+      faceWidth: 58,
+      contentWidth: 2000,
+    });
+    expect(left).toBe(379);
+  });
+
+  it("never asks for a scroll before the start", () => {
+    // the first face sits inside the leading slack: centring it would want a negative scroll,
+    // and a roll to it must simply stay at the start rather than jump
+    const left = centringScroll({ ...box, faceLeft: 120, faceWidth: 58, contentWidth: 2000 });
+    expect(left).toBe(0);
+  });
+
+  it("never asks for a scroll past the end", () => {
+    // the last face: centring it would run off the end of the content, so the strip stops there
+    const left = centringScroll({ ...box, faceLeft: 1700, faceWidth: 58, contentWidth: 1800 });
+    expect(left).toBe(900); // 1800 - 900, the furthest the box can go
+  });
+
+  it("stays still when nothing overflows", () => {
+    // the whole strip fits: there is nowhere to roll to, which is exactly the case the two 40vw
+    // slack spans produced on a wide window and which made the console look like it never rolled
+    const left = centringScroll({ ...box, faceLeft: 300, faceWidth: 58, contentWidth: 880 });
+    expect(left).toBe(0);
+  });
+
+  it("grows the reachable range with the content, not with the viewport", () => {
+    // a wider window is a wider box but the same content: the face still lands centred, and the
+    // clamp is still the content's own end
+    const left = centringScroll({ boxLeft: 0, boxWidth: 1400, faceLeft: 900, faceWidth: 58, scrollLeft: 0, contentWidth: 1800 });
+    expect(left).toBe(229); // 900 - (1400 - 58) / 2
   });
 });

@@ -27,7 +27,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,6 +52,13 @@ import io.github.nanomuse.reach.Computers
  * name under it needs on either side.
  */
 private val SLOT = 58.dp
+
+/**
+ * The focused device the strip was last fitted to, or null before the first fit. Outside the
+ * composition because a tap rebuilds the strip (see [nmDeviceFaces]); inside it, the flag would
+ * reset on every tap and no roll would ever animate.
+ */
+private var nmLastFocusedDevice: String? = null
 
 /**
  * The account's devices as a strip just above the box: one round disc per device, the one whose
@@ -91,10 +97,21 @@ fun nmDeviceFaces(
     val middle = devices.indexOfFirst { it.hubId == focusedId }
     // The first composition lands where it belongs without animating: a chat that opens on a
     // device should not slide under the reader's eyes. Every pick after that rolls.
-    var landed by remember { mutableStateOf(false) }
+    //
+    // What was last fitted is remembered outside the composition on purpose. A tap opens another
+    // chat, which rebuilds the chat screen and with it this strip; a `remember`ed flag would be
+    // born false again on every tap, so every roll would be treated as a first fit and never
+    // animate. It is the focused id and not the row's index: the list reorders as devices come
+    // up and go down, and an index would read a reorder as a pick and roll the strip by itself.
     LaunchedEffect(middle, devices.size, viewport) {
         if (viewport == 0 || middle < 0) return@LaunchedEffect
-        if (landed) list.animateScrollToItem(middle) else list.scrollToItem(middle).also { landed = true }
+        val known = nmLastFocusedDevice
+        // a roll to a *different* device animates; the first fit (nothing remembered) and a
+        // recomposition that lands on the device already centred both stay still. The console
+        // answers the same way (web/src/components/DeviceFaces.tsx), so the two do not drift.
+        val moved = known != null && known != focusedId
+        nmLastFocusedDevice = focusedId
+        if (moved) list.animateScrollToItem(middle) else list.scrollToItem(middle)
     }
 
     LazyRow(
