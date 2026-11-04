@@ -7,7 +7,7 @@ import { directTarget, sendToDevice } from "../device-send";
 import { AvatarOptionsCard } from "../components/AvatarOptionsCard";
 import { BrowserViewer } from "../components/BrowserViewer";
 import { MicButton, useDictation } from "../components/Dictation";
-import { DeviceStrip } from "../components/DeviceStrip";
+import { DeviceFaces } from "../components/DeviceFaces";
 import { ApprovalCard, ArtifactCard, BrowserCard, HandsCard, HoldCard, Notice, QuestionCard, ToolChip } from "../components/Cards";
 import { IntroLines, NamingCard } from "../components/FirstConversation";
 import { Markdown, splitBlocks } from "../components/Markdown";
@@ -35,6 +35,10 @@ export function ChatScreen() {
   const eventsLoaded = loaded !== undefined;
   const stream = state.streams[activeThread];
   const thread = threads.find((t) => t.id === activeThread);
+  // nanoMuse: the device the open chat is addressed to, drawn larger in the header's device row
+  // (the runtime keeps a chat per device, so this is what "which device is this chat with"
+  // means here). Empty for the main chat and for side chats.
+  const chatDevice = thread?.device ?? "";
   const [activityOpen, setActivityOpen] = useState(false);
   // the browser card being watched (or driven) full-screen
   const [browserView, setBrowserView] = useState<string | null>(null);
@@ -243,6 +247,7 @@ export function ChatScreen() {
           spinning={((status.state === "working" && status.thread === activeThread) || !!thread?.busy) && waitingHere === 0}
           badge={queued}
           onAvatar={() => setActivityOpen(true)}
+          faces={<DeviceFaces chatDevice={chatDevice} profile={profile} status={status} />}
           leading={
             <MuseRoundButton onClick={() => setDrawer(true)} label={t("Chats")} dot={threads.length > 1 && activeThread !== "main"} className="wide:invisible">
               <Menu size={22} />
@@ -784,11 +789,6 @@ export function Composer({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
-  // nanoMuse: the account's devices as a strip above the box, the open chat's one enlarged.
-  // A tap opens or returns to that device's chat, which is what `@<device>` does and what a
-  // phone cannot do at all (its picker lists files only, so the name has to be typed). See
-  // src/device-strip.ts and src/components/DeviceStrip.tsx.
-  const chatDevice = state.threads?.find((th) => th.id === state.activeThread)?.device ?? "";
   // voice input: the words recognised so far replace what dictation put in the box, after
   // whatever was typed before the mic was tapped
   const typedBefore = useRef("");
@@ -1015,7 +1015,6 @@ export function Composer({
           ))}
         </div>
       )}
-      <DeviceStrip chatDevice={chatDevice} />
       <div className="flex items-end gap-2 rounded-[26px] border border-border bg-surface px-1.5 py-1.5 shadow-[0_2px_12px_-6px_rgba(0,0,0,0.12)] focus-within:border-fg/20">
         <input
           ref={fileRef}

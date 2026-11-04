@@ -21,6 +21,7 @@ export function MuseHeader({
   onName,
   leading,
   trailing,
+  faces,
   under,
   size = 72,
   className,
@@ -40,6 +41,8 @@ export function MuseHeader({
   onName?: () => void;
   leading?: ReactNode;
   trailing?: ReactNode;
+  /** the account's other devices, beside the face (nanoMuse) */
+  faces?: ReactNode;
   /** a chip under the tag (the side chat's title, the device a chat is addressed to) */
   under?: ReactNode;
   size?: number;
@@ -50,14 +53,24 @@ export function MuseHeader({
   return (
     <header className={cx("safe-top relative shrink-0 pt-1.5 pb-1", scrim ? "header-scrim" : "bg-bg", className)}>
       <div className="flex flex-col items-center px-16">
-        <button type="button" onClick={onAvatar} aria-label={name} className="relative rounded-full">
-          <Avatar profile={profile} status={status} size={size} />
-          {badge !== undefined && badge > 0 && (
-            <span className="pointer-events-none absolute -right-0.5 top-0 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-bg bg-rose-500 px-1 text-[10.5px] font-bold text-white">
-              {badge}
-            </span>
+        {/* nanoMuse: the account's Muses as one row of faces — the one whose chat is open
+            large in the middle, the rest small on either side (DeviceFaces). The agent's own
+            face is one of them rather than a lone face beside them: the row is the account, and
+            a chat with no device open is this device's own, so its face takes the middle then.
+            Beside the face and not over the box, because the face is where the app already says
+            whose chat this is. */}
+        <div className="flex w-full items-center justify-center gap-2">
+          {faces ?? (
+            <button type="button" onClick={onAvatar} aria-label={name} className="relative shrink-0 rounded-full">
+              <Avatar profile={profile} status={status} size={size} />
+              {badge !== undefined && badge > 0 && (
+                <span className="pointer-events-none absolute -right-0.5 top-0 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-bg bg-rose-500 px-1 text-[10.5px] font-bold text-white">
+                  {badge}
+                </span>
+              )}
+            </button>
           )}
-        </button>
+        </div>
         {/* the tag rides up over the chin; its area is fixed so the bar keeps its height */}
         <div className="relative z-10 -mt-2.5 flex min-h-[44px] flex-col items-center">
           <MuseNamePill name={name} statusLine={statusLine} statusTone={statusTone} spinning={spinning} onClick={onName ?? onAvatar} />

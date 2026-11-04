@@ -3465,6 +3465,50 @@ class ChatViewModel(
         _nmAimedDevice.value = aimed
     }
 
+    // nanoMuse: the header's device faces. A tap opens the chat this phone keeps with that
+    // device, making it the first time, the way the console and iOS do it: a device's answers
+    // and the questions it asks belong in its own chat, not in whatever chat happened to be
+    // open.
+    /**
+     * Opens the chat this phone keeps with [device], making it the first time: what tapping a
+     * device's face in the header does. The chat is the device's own, as on the console and on
+     * iOS, so its answers and the questions it asks land where they can be read and answered
+     * (io.github.nanomuse.terminal.DeviceChat). The shell is told to show it; a shell that is
+     * not up yet picks the request up when it is.
+     */
+    fun nmOpenDeviceChat(device: io.github.nanomuse.reach.Computers.Computer) {
+        if (!device.online) {
+            // said here, in the chat that is open, rather than by opening the device's own chat
+            // to find it empty: a device that is asleep is not a place to be taken to
+            appendSystemInfo(
+                text = context.getString(R.string.nm_device_offline_now, device.name),
+                iconKind = "device",
+            )
+            return
+        }
+        viewModelScope.launch {
+            val repo = chatRepository
+            io.github.nanomuse.terminal.DeviceChat.existing(context, repo, device)?.let { existing ->
+                io.github.nanomuse.ui.home.HomeBus.showSession(existing)
+                return@launch
+            }
+            val seeded = currentModel?.id
+                ?: providerRepository.config.value.modelGroups
+                    .firstOrNull()?.let { g -> providerRepository.availableMemberEntries(g).firstOrNull()?.model?.id }
+                ?: providerRepository.allVisibleEntries().firstOrNull()?.baseModel?.id
+                ?: return@launch
+            val made = runCatching {
+                repo.createSession(
+                    modelId = seeded,
+                    title = context.getString(R.string.nm_device_chat_title, device.name),
+                    memoryEnabled = _memoryEnabled.value,
+                )
+            }.getOrNull() ?: return@launch
+            io.github.nanomuse.terminal.DeviceChat.remember(context, device, made.id)
+            io.github.nanomuse.ui.home.HomeBus.showSession(made.id)
+        }
+    }
+
     // nanoMuse: the first conversation — scripted opening, "what should I call
     // you?", then the name chooser. Logic lives in io.github.nanomuse.onboarding;
     // this VM only seeds the virtual messages, intercepts the name, and appends
@@ -6352,9 +6396,7 @@ class ChatViewModel(
             context = context,
             sessionId = sid,
             text = text,
-            known = io.github.nanomuse.terminal.DeviceStrip.aims(
-                io.github.nanomuse.terminal.DeviceStrip.devices(io.github.nanomuse.hub.Hub.devices.value),
-            ),
+            known = io.github.nanomuse.terminal.DeviceStrip.others(io.github.nanomuse.hub.Hub.devices.value),
         ) ?: return false
         // What is said to the device: the words after the mention, or the whole message when
         // there was no mention (the aim carried it).

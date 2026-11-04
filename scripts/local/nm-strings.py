@@ -24,12 +24,18 @@ NEW = {
     "nm_device_step_failed": "failed: %1$s",
     "nm_device_failed": "%1$s could not finish: %2$s",
     "nm_device_stopped": "Stopped. %1$s was told to end it.",
+    # the device faces in the header: the chat one opens for a device, and what is said when
+    # that device is asleep
+    "nm_device_chat_title": "→ %1$s",
+    "nm_device_offline_now": "%1$s is not connected right now.",
 }
 
 ZH = {
     "nm_device_step_failed": "失败：%1$s",
     "nm_device_failed": "%1$s 没能做完：%2$s",
     "nm_device_stopped": "已停止，并且通知了 %1$s 结束这次任务。",
+    "nm_device_chat_title": "→ %1$s",
+    "nm_device_offline_now": "%1$s 现在没有连接。",
 }
 
 

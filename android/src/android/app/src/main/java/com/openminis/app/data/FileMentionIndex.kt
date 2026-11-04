@@ -81,11 +81,18 @@ class FileMentionIndex(
         // file on this phone, offered by the same `@` menu (docs/hub.md; iOS does the same
         // in NanoMuseDeviceMention.menuEntries).
         val nmDeviceDetail: String? = null,
+        // nanoMuse: the identity of the row, which a device row cannot take from its path: two
+        // devices of one account may perfectly well share a name (two phones of the same model,
+        // say), and the picker's list needs a key that is unique per row. A file's path is
+        // already unique, so only a device passes one.
+        val nmKey: String? = null,
     ) {
         val basename: String get() = linuxPath.substringAfterLast('/').ifEmpty { linuxPath }
         // nanoMuse: a device's row says what the device is (its system, whether it is up)
         // rather than repeating the name the row already shows.
         val displayPath: String get() = nmDeviceDetail ?: linuxPath.removePrefix("/var/minis/")
+        // nanoMuse: what the picker keys its rows by — the device's own id where there is one.
+        val rowKey: String get() = nmKey ?: linuxPath
     }
 
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())

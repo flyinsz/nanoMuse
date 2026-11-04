@@ -6,78 +6,90 @@ import io.github.nanomuse.hub.Hub
 import io.github.nanomuse.reach.Computers
 
 /**
- * The account's other devices, as the chat draws them twice over: the strip of avatars above
- * the composer, and the devices the `@` picker offers above the files it already lists.
+ * The account's Muses, as the chat draws them twice over: the row of faces in the header, and
+ * the devices the `@` picker offers above the files it already lists.
  *
  * Why both. The mention is a reading of what was typed, so it can only offer a device whose
- * name the person already knows and can spell; Android's picker listed files alone before
- * this, so a device could only be reached by typing its name exactly, which is the whole cost
- * of the feature on a phone. The strip says who is reachable at a glance, in one tap; the
- * picker says it while a name is being typed. They answer the same question and must not
- * disagree, so the rule lives here once.
+ * name the person already knows and can spell; Android's picker listed files alone before this,
+ * so a device could only be reached by typing its name exactly, which is the whole cost of the
+ * feature on a phone. The faces say who is there at a glance, in one tap; the picker says it
+ * while a name is being typed. They answer the same question and must not disagree, so the rule
+ * lives here once.
  *
  * The devices are the hub's own list, not `Computers.hubDevices`: that one answers "where may a
- * command go right now" and so keeps only what is online, while a strip has to show the
- * sleeping ones too (greyed) for the person to know why a task to them would not go.
- *
- * A tap on the strip does what a mention does: [RemoteTaskController] sends the frame and the
- * chat shows the run. Nothing here changes a chat's target: a chat's device is set when it is
- * made and never moves, so a device already talked to is returned to.
+ * command go right now" and keeps only what is online, while the faces have to show the
+ * sleeping ones too (faint) for the person to know why a tap on them would not go anywhere.
  */
 object DeviceStrip {
-    /** One device of the strip: which to draw, and whether it is the one being talked to. */
-    data class Chip(val device: Device, val focused: Boolean)
-
-    /** This phone and any browser tab are left out: neither can take a task. */
-    fun devices(all: List<Device>): List<Device> =
-        all.filter { it.name.isNotBlank() && it.kind != "web" }
-
     /**
-     * The devices the strip draws, as the chat's own type: this phone and browser tabs aside,
-     * the online ones by name and then the offline ones. The same list [DeviceAim] resolves an
-     * aim against, so the avatar that looks aimed is the one a message goes to.
-     */
-    fun aims(all: List<Device>): List<Computers.Computer> =
-        devices(all)
-            .sortedWith(compareBy({ if (it.online) 0 else 1 }, { it.name.lowercase() }))
-            .map { d ->
-                Computers.Computer(
-                    id = "hub:" + d.id,
-                    name = d.name,
-                    os = d.os,
-                    hubId = d.id,
-                    kind = d.kind,
-                    online = d.online,
-                    lastSeen = d.lastSeen,
-                )
-            }
-
-    /**
-     * The devices the strip lists, in the order it draws them: the one the open chat is
-     * addressed to first (it is the enlarged one, and should not move as the person switches
-     * chats), then the online ones by name, then the offline ones by name.
+     * Every Muse of the account, in the order the row draws them: this phone first (it is the
+     * one being held, and the one a chat with no device of its own belongs to), then the other
+     * devices, the online ones by name ahead of the sleeping ones.
      *
-     * Offline devices are kept and drawn greyed rather than hidden: a device that is merely
-     * asleep is still one of the person's.
+     * Browser tabs are left out — there is nothing there to talk to — and so is a nameless
+     * entry. The phone is *in*, because the row is the account's Muses and its own face is one
+     * of them: picking it is how a chat goes back to being this phone's own.
      */
-    fun strip(devices: List<Device>, chatDevice: String): List<Chip> =
-        devices
-            .sortedWith(
-                compareBy(
-                    { if (chatDevice.isNotBlank() && it.id == chatDevice) 0 else 1 },
-                    { if (it.online) 0 else 1 },
-                    { it.name.lowercase() },
-                ),
-            )
-            .map { Chip(it, chatDevice.isNotBlank() && it.id == chatDevice) }
+    fun muses(all: List<Device>): List<Computers.Computer> = all
+        .filter { it.name.isNotBlank() && it.kind != "web" }
+        .sortedWith(
+            compareBy(
+                { if (it.isThis) 0 else 1 },
+                { if (it.online) 0 else 1 },
+                { it.name.lowercase() },
+            ),
+        )
+        .map(::asComputer)
+
+    /**
+     * The devices that may be written to: every Muse but this phone, which is the chat rather
+     * than something the chat talks to. What the `@` picker offers and what a send resolves an
+     * aim against.
+     */
+    fun others(all: List<Device>): List<Computers.Computer> = all
+        .filter { it.name.isNotBlank() && it.kind != "web" && !it.isThis }
+        .sortedWith(compareBy({ if (it.online) 0 else 1 }, { it.name.lowercase() }))
+        .map(::asComputer)
+
+    /**
+     * The row as the header draws it: the face in the middle, the faces to its left, and the
+     * faces to its right. [focusedHubId] is the device the open chat is addressed to, or empty
+     * for the phone itself, which is the middle face in that case.
+     *
+     * The split is by count, so the two sides are of like width and the middle face stays in the
+     * middle of the bar; nothing about the devices themselves decides it. This is the one place
+     * the arrangement is decided, so the phone and the console cannot draw the same account two
+     * different ways.
+     */
+    fun sides(
+        all: List<Device>,
+        focusedHubId: String,
+        phoneId: String,
+    ): Row {
+        val everyone = muses(all)
+        val want = focusedHubId.ifBlank { phoneId }
+        val middle = everyone.firstOrNull { it.hubId == want }
+            ?: everyone.firstOrNull { it.hubId == phoneId }
+            ?: everyone.firstOrNull()
+        val rest = everyone.filter { it.hubId != middle?.hubId }
+        val half = (rest.size + 1) / 2
+        return Row(middle = middle, left = rest.take(half), right = rest.drop(half))
+    }
+
+    /** The header's row: whose face is in the middle, and which are on either side of it. */
+    data class Row(
+        val middle: Computers.Computer?,
+        val left: List<Computers.Computer>,
+        val right: List<Computers.Computer>,
+    )
 
     /**
      * The devices the `@` picker offers for [prefix], the online ones first and the ones whose
-     * name begins with what was typed ahead of the ones that merely contain it (the same
-     * ranking iOS uses), capped so a picker stays a picker. An empty prefix offers everything,
-     * which is what the person gets the moment they type `@`.
+     * name begins with what was typed ahead of the ones that merely contain it (the same ranking
+     * iOS uses), capped so a picker stays a picker. An empty prefix offers everything, which is
+     * what the person gets the moment they type `@`.
      */
-    fun suggestions(devices: List<Device>, prefix: String, limit: Int = 6): List<Device> {
+    fun suggestions(devices: List<Computers.Computer>, prefix: String, limit: Int = 6): List<Computers.Computer> {
         val p = prefix.trim().lowercase()
         return devices
             .filter { p.isEmpty() || it.name.lowercase().contains(p) }
@@ -108,13 +120,12 @@ object DeviceStrip {
     /**
      * The devices as rows of the `@` picker, above the files it already lists. The row's
      * `linuxPath` is the device's name, so picking it writes `@<name> ` — exactly what
-     * [DeviceTargetMention.reading] reads back when the message is sent, which is how the
-     * picker and the send stay in step without either knowing about the other.
+     * [DeviceTargetMention.reading] reads back when the message is sent, which is how the picker
+     * and the send stay in step without either knowing about the other.
      *
-     * The badge says "device" (`mountName`), so the row reads as one of the account's
-     * computers or phones rather than a folder; the second line is the system and whether the
-     * device is up (the same pair the computers panel shows), since the row's title is
-     * already the name.
+     * The badge says "device" (`mountName`), so the row reads as one of the account's computers
+     * or phones rather than a folder; the second line is the system and whether the device is up
+     * (the same pair the computers panel shows), the row's title being the name already.
      */
     fun entries(
         context: android.content.Context,
@@ -123,7 +134,7 @@ object DeviceStrip {
     ): List<FileMentionIndex.Entry> {
         val up = context.getString(com.openminis.app.R.string.nm_pc_online)
         val down = context.getString(com.openminis.app.R.string.nm_pc_offline)
-        return suggestions(devices(Hub.devices.value), filter, limit).map { d ->
+        return suggestions(others(Hub.devices.value), filter, limit).map { d ->
             FileMentionIndex.Entry(
                 linuxPath = d.name,
                 scope = FileMentionIndex.Scope.MOUNT,
@@ -133,14 +144,27 @@ object DeviceStrip {
                 nmDeviceDetail = listOf(d.os, if (d.online) up else down)
                     .filter { it.isNotBlank() }
                     .joinToString(" · "),
+                // the picker's key: two devices of one account may share a name, and a repeated
+                // key in a list is a crash, not a cosmetic flaw
+                nmKey = "device:" + d.hubId,
             )
         }
     }
 
     /**
-     * The badge the picker's device rows carry, so the view can tell them from files and draw
-     * the device icon instead of the document one. English and lower case like the scope
-     * labels beside it ("skills", "workspace").
+     * The badge the picker's device rows carry, so the view can tell them from files and draw a
+     * device icon instead of the document one. English and lower case like the scope labels
+     * beside it ("skills", "workspace").
      */
     const val DEVICE_BADGE = "device"
+
+    private fun asComputer(d: Device) = Computers.Computer(
+        id = "hub:" + d.id,
+        name = d.name,
+        os = d.os,
+        hubId = d.id,
+        kind = d.kind,
+        online = d.online,
+        lastSeen = d.lastSeen,
+    )
 }

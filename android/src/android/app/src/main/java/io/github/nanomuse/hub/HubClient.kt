@@ -28,6 +28,11 @@ data class Device(
     val online: Boolean,
     val actions: List<String>,
     val lastSeen: Long,
+    // nanoMuse: the relay marks the entry that is this very phone, which the header's row of
+    // faces needs in order to draw it as one of the account's Muses rather than as a device to
+    // be written to (the relay has always sent `this`; this side never read it). Named isThis
+    // because `this` is a keyword in Kotlin.
+    val isThis: Boolean = false,
 ) {
     val isPhone: Boolean get() = kind == "phone"
     val isComputer: Boolean get() = kind == "computer"
@@ -42,6 +47,7 @@ data class Device(
             online = o.optBoolean("online"),
             actions = o.optJSONArray("actions")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
             lastSeen = o.optLong("last_seen") * 1000,
+            isThis = o.optBoolean("this"),
         )
     }
 }

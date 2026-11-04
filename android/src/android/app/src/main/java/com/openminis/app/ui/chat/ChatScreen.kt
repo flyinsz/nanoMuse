@@ -2677,40 +2677,73 @@ fun ChatScreen(
                             // gets the big face on its disc.
                             val nmSideChat = nmHome != null && !nmHome.isMainChat
                             val nmMainChat = nmHome != null && nmHome.isMainChat
-                            if (nmSideChat) {
-                                Text(
-                                    text = sessionTitle?.trim()?.ifEmpty { null }
-                                        ?: stringResource(R.string.nm_drawer_untitled),
-                                    fontSize = 17.sp,
-                                    lineHeight = 21.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = ChatColors.primaryText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = noFontPad,
-                                    modifier = Modifier.padding(bottom = 1.dp),
+                            // nanoMuse: the account's Muses as one row of faces around the
+                            // agent's own — the one whose chat is open large in the middle,
+                            // the rest small on either side, a tap on any of them opening that
+                            // Muse's chat (io.github.nanomuse.ui.chat.nmDeviceFaces). Every
+                            // device wears the same face because the profile is per account
+                            // (that is the account's own rule), so size and name are what tell
+                            // them apart. Here rather than over the composer: the header is
+                            // where the app already says whose chat this is, and a row over the
+                            // box reads as part of the message being written, which it is not.
+                            val nmAimedDevice by viewModel.nmAimedDevice.collectAsState()
+                            val nmRow = io.github.nanomuse.terminal.DeviceStrip.sides(
+                                all = io.github.nanomuse.hub.Hub.devices.collectAsState().value,
+                                focusedHubId = nmAimedDevice,
+                                phoneId = io.github.nanomuse.hub.Hub.deviceId(context),
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                io.github.nanomuse.ui.chat.nmDeviceFaces(
+                                    devices = nmRow.left,
+                                    mood = nmMood,
+                                    size = 30.dp,
+                                    alignEnd = true,
+                                    modifier = Modifier.weight(1f),
+                                    onPick = { viewModel.nmOpenDeviceChat(it) },
                                 )
-                            } else if (nmMainChat) {
-                                // nanoMuse: the disc follows Settings → Appearance → Avatar size;
-                                // "hidden" leaves the name tag alone. Tapping the face opens the
-                                // agent's profile page, as in Muse.
-                                val nmDisc = nmAvatarSize.disc
-                                if (nmDisc != null) {
-                                    io.github.nanomuse.ui.avatar.AgentAvatarDisc(
+                                // the Muse whose chat is open: the middle face, drawn large
+                                nmRow.middle?.let { mine ->
+                                    io.github.nanomuse.ui.chat.nmDeviceFace(
+                                        device = mine,
                                         mood = nmMood,
-                                        discSize = nmDisc,
-                                        contentDescription = stringResource(R.string.nm_avatar_content_description),
-                                        onClick = { io.github.nanomuse.ui.header.openAgentProfile(context) },
+                                        size = if (nmSideChat) 34.dp else 46.dp,
+                                        onClick = {
+                                            // picking the middle one is how a chat goes back to
+                                            // being this phone's own; a device's own chat is
+                                            // opened from the sides
+                                            if (mine.hubId != io.github.nanomuse.hub.Hub.deviceId(context)) {
+                                                viewModel.nmOpenDeviceChat(mine)
+                                            } else {
+                                                io.github.nanomuse.ui.header.openAgentProfile(context)
+                                            }
+                                        },
                                     )
-                                } else {
-                                    Spacer(Modifier.height(10.dp))
                                 }
-                            } else
-                            io.github.nanomuse.ui.avatar.AgentAvatar(
-                                mood = nmMood,
-                                size = 36.dp,
-                                contentDescription = stringResource(R.string.nm_avatar_content_description),
-                                onClick = { io.github.nanomuse.ui.header.openAgentProfile(context) },
+                                io.github.nanomuse.ui.chat.nmDeviceFaces(
+                                    devices = nmRow.right,
+                                    mood = nmMood,
+                                    size = 30.dp,
+                                    modifier = Modifier.weight(1f),
+                                    onPick = { viewModel.nmOpenDeviceChat(it) },
+                                )
+                            }
+                            // nanoMuse: a side chat's own title, where it always was — under the
+                            // face. Side chats keep it because their title is what tells two
+                            // side chats apart; the main chat wears the agent's name instead.
+                            if (nmSideChat) Text(
+                                text = sessionTitle?.trim()?.ifEmpty { null }
+                                    ?: stringResource(R.string.nm_drawer_untitled),
+                                fontSize = 17.sp,
+                                lineHeight = 21.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = ChatColors.primaryText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = noFontPad,
+                                modifier = Modifier.padding(bottom = 1.dp),
                             )
                             if (!nmSideChat && !nmMainChat) Spacer(Modifier.height(2.dp))
                             // nanoMuse: the pill is the agent's name (Muse's
@@ -5391,7 +5424,7 @@ fun ChatScreen(
                                         )
                                         .verticalScrollbar(mentionListState),
                                 ) {
-                                    itemsIndexed(mentionEntries, key = { _, e -> e.linuxPath }) { i, entry ->
+                                    itemsIndexed(mentionEntries, key = { _, e -> e.rowKey }) { i, entry -> // nanoMuse: a device row keys by its id, two devices may share a name
                                         val isSelected = i == mentionSelectedIndex
                                         Row(
                                             modifier = Modifier
@@ -5493,20 +5526,6 @@ fun ChatScreen(
                 // activates the keyboard instead. Box wraps the existing
                 // composer Column so the gesture + overlay live in the same
                 // coordinate space without disturbing the bar's own layout.
-                // nanoMuse: the account's devices as a row of avatars above the box, the one
-                // this chat is aimed at drawn larger (io.github.nanomuse.ui.chat.nmDeviceStripRow).
-                // Above the swipe Box rather than inside it, so a drag on an avatar is not read
-                // as a swipe-to-send. Tapping one aims the chat at that device; tapping the
-                // aimed one again lets it go.
-                val nmAimed by viewModel.nmAimedDevice.collectAsState()
-                io.github.nanomuse.ui.chat.nmDeviceStripRow(
-                    sessionId = viewModel.realSessionId.ifEmpty { viewModel.sessionId },
-                    aimedId = nmAimed,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = nmComposerHorizontalInset, vertical = 2.dp),
-                    onAim = { viewModel.nmAimAt(if (it == null || it.hubId == nmAimed) null else it.hubId) },
-                )
                 Box(modifier = Modifier
                     .fillMaxWidth()
                     .pointerInput(Unit) {
