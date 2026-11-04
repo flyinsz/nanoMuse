@@ -89,8 +89,14 @@ object DeviceChat {
      * Records the chat made for [device], so the next tap returns to it rather than making
      * another. Aimed at the same moment: the chat exists in order to talk to that device, so
      * the two facts are written together and cannot drift.
+     *
+     * Nothing is written for this phone. A chat *with* the phone is not a thing: the phone's own
+     * Muse is the main chat, and picking its face goes back there rather than opening one. A
+     * mapping recorded for it would name a chat with no way to be opened, so its dot could never
+     * be cleared — which is what a leftover from before the relay's `this` was read did.
      */
     fun remember(context: Context, device: Computers.Computer, sessionId: String) {
+        if (device.isThis) return
         prefs(context).edit().putString(key(device), sessionId).apply()
         DeviceAim.set(context, sessionId, device.hubId)
     }

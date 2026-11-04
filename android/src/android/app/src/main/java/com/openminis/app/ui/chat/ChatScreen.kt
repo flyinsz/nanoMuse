@@ -5539,8 +5539,20 @@ fun ChatScreen(
                 // The two things a face says besides its name: a turn under way in that chat, and
                 // a reply that arrived while nobody was reading it. Both are facts about the
                 // *device's own chat*, so they are read from those chats — the strip draws, it
-                // does not decide. Which chat belongs to which device is DeviceChat's mapping,
-                // the same one a tap reads, so the two cannot disagree.
+                // does not decide.
+                //
+                // Which chat is whose is narrowed to the strip's own list first, and that is the
+                // point: the faces are the account's *other* devices (plus this phone, whose
+                // "chat" is the main chat and which therefore has no chat of its own to be
+                // unread). The stored mapping is only ever written for a device a chat was opened
+                // with, so a leftover entry for this phone — every phone that tapped its own face
+                // before the relay's `this` was read has one — would name a session nothing can
+                // open, whose dot could therefore never clear. Reading the list first keeps the
+                // two in step by construction.
+                val nmHubDevices by io.github.nanomuse.hub.Hub.devices.collectAsState()
+                val nmOtherIds = remember(nmHubDevices) {
+                    io.github.nanomuse.terminal.DeviceStrip.others(nmHubDevices).map { it.hubId }.toSet()
+                }
                 val nmSessions by chatRepository.observeSessions()
                     .collectAsState(initial = emptyList())
                 // A device chat that has moved on since the last time it was read here. The
@@ -5554,13 +5566,16 @@ fun ChatScreen(
                 // empty and the stored marks are what survives a restart.
                 io.github.nanomuse.terminal.DeviceNews.load(context)
                 val nmSeenMarks by io.github.nanomuse.terminal.DeviceNews.marks.collectAsState()
-                val nmNewsDevices = remember(nmSessions, nmSeenMarks) {
+                val nmNewsDevices = remember(nmSessions, nmSeenMarks, nmOtherIds) {
                     nmSessions.mapNotNull { s ->
-                        io.github.nanomuse.terminal.DeviceChat.deviceOf(context, s.id)?.takeIf {
-                            io.github.nanomuse.terminal.DeviceNews.unread(
-                                s.updatedAt,
-                                nmSeenMarks[s.id] ?: 0L,
-                            )
+                        val hubId = io.github.nanomuse.terminal.DeviceChat.deviceOf(context, s.id)
+                            ?: return@mapNotNull null
+                        hubId.takeIf {
+                            hubId in nmOtherIds &&
+                                io.github.nanomuse.terminal.DeviceNews.unread(
+                                    s.updatedAt,
+                                    nmSeenMarks[s.id] ?: 0L,
+                                )
                         }
                     }.toSet()
                 }
