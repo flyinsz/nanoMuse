@@ -1213,4 +1213,5 @@
     <!-- The device strip's label for the phone being held. It wears the account's name, which
          every device of the account wears, so under its own disc that name says nothing. -->
     <string name="nm_device_this">This device</string>
+    <string name="nm_device_has_news">New messages</string>
 </resources>

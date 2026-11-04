@@ -1172,6 +1172,7 @@ const zhCN: Record<string, string> = {
   "Ask one of your devices": "让某台设备去做",
   // the device strip above the composer (0.1.42)
   "Your devices": "你的设备",
+  "New messages": "有新消息",
   "Open the chat with {device}": "打开与 {device} 的对话",
   "{device} is offline": "{device} 当前离线",
   "{device} is not connected right now.": "{device} 现在没有连接。",

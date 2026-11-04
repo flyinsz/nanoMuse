@@ -5524,6 +5524,27 @@ fun ChatScreen(
                 // face picked is the middle one and opens that Muse's chat. Above the swipe Box
                 // rather than inside it, so a drag on a face is not read as a swipe-to-send.
                 val nmFaces by viewModel.nmAimedDevice.collectAsState()
+                // The two things a face says besides its name: a turn under way in that chat, and
+                // a reply that arrived while nobody was reading it. Both are facts about the
+                // *device's own chat*, so they are read from those chats — the strip draws, it
+                // does not decide. Which chat belongs to which device is DeviceChat's mapping,
+                // the same one a tap reads, so the two cannot disagree.
+                val nmSessions by chatRepository.observeSessions()
+                    .collectAsState(initial = emptyList())
+                // A device chat that has moved on since the last time it was read here. The
+                // session's own last-write time is weighed against this phone's own record of
+                // having read it (DeviceNews) — so this is about what has been read *here*, not
+                // about the account, and the face and the chat's row in the drawer agree.
+                val nmNewsDevices = remember(nmSessions) {
+                    nmSessions.mapNotNull { s ->
+                        io.github.nanomuse.terminal.DeviceChat.deviceOf(context, s.id)?.takeIf {
+                            io.github.nanomuse.terminal.DeviceNews.unread(
+                                s.updatedAt,
+                                io.github.nanomuse.terminal.DeviceNews.seenAt(context, s.id),
+                            )
+                        }
+                    }.toSet()
+                }
                 io.github.nanomuse.ui.chat.nmDeviceFaces(
                     devices = io.github.nanomuse.terminal.DeviceStrip.muses(
                         io.github.nanomuse.hub.Hub.devices.collectAsState().value,
@@ -5535,6 +5556,7 @@ fun ChatScreen(
                     // and keeps the idle discs legible at their 28dp.
                     focusedSize = 40.dp,
                     idleSize = 28.dp,
+                    newsIds = nmNewsDevices,
                     modifier = Modifier.padding(
                         horizontal = nmComposerHorizontalInset,
                         vertical = 4.dp,

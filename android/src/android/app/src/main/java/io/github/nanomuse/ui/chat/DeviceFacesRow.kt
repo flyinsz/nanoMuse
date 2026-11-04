@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -37,6 +38,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -84,6 +87,10 @@ fun nmDeviceFaces(
     focusedSize: Dp,
     idleSize: Dp,
     modifier: Modifier = Modifier,
+    /** hub ids whose chat has a turn under way: the disc wears the spinner */
+    busyIds: Set<String> = emptySet(),
+    /** hub ids whose chat holds a reply the person has not read: the disc wears a dot */
+    newsIds: Set<String> = emptySet(),
     onPick: (Computers.Computer) -> Unit,
 ) {
     if (devices.isEmpty()) return
@@ -94,7 +101,14 @@ fun nmDeviceFaces(
     // Half a strip of padding on each end, so the first and the last device can reach the middle
     // too; with it, "scroll this device into view" is the same as "put it in the middle".
     val halfPx = ((viewport - slotPx) / 2f).coerceAtLeast(0f)
+    // Which face is drawn large. A blank [focusedId] is this phone — the main chat is its own
+    // chat, and its face is the one in front — so the id is resolved here rather than matched
+    // against the list, where a blank would find nobody and leave every face idle.
     val middle = devices.indexOfFirst { it.hubId == focusedId }
+        .takeIf { it >= 0 }
+        ?: devices.indexOfFirst { it.isThis }
+    // read once, outside the loop: a `stringResource` per item would read the same string again
+    val newsLabel = stringResource(R.string.nm_device_has_news)
     // The first composition lands where it belongs without animating: a chat that opens on a
     // device should not slide under the reader's eyes. Every pick after that rolls.
     //
@@ -124,7 +138,9 @@ fun nmDeviceFaces(
     ) {
         items(devices.size, key = { devices[it].hubId }) { i ->
             val d = devices[i]
-            val here = d.hubId == focusedId
+            // compared by position, because the blank focused id of the main chat means "this
+            // phone" rather than "no device" — see where `middle` is resolved above
+            val here = i == middle
             val grow by animateFloatAsState(
                 targetValue = if (here) focusedSize.value / idleSize.value else 1f,
                 animationSpec = tween(durationMillis = 280),
@@ -168,6 +184,37 @@ fun nmDeviceFaces(
                             // 19dp inside a 40dp disc, the same proportion the console draws
                             // (22px inside 46px) — the glyph was filling its ring at 22dp
                             modifier = Modifier.size(if (here) 19.dp else 15.dp),
+                        )
+                    }
+                    // A turn under way on that device reads here too, not just in its own chat:
+                    // the strip is where the person sees who is doing what without opening each
+                    // one. A dot is for news the person has not read — a reply that arrived in a
+                    // chat nobody was looking at, which is the whole reason to leave one. The
+                    // spinner wins when both would show: work under way is the more urgent of the
+                    // two and the only one that clears itself.
+                    val busy = d.hubId in busyIds
+                    when {
+                        busy -> Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .size(14.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surface),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(9.dp),
+                                strokeWidth = 1.5.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        d.hubId in newsIds -> Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                                .semantics { contentDescription = newsLabel },
                         )
                     }
                 }

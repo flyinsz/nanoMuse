@@ -73,6 +73,23 @@ export interface CodingLive {
 }
 
 const FEED_SEEN_KEY = "nanomuse_feed_seen";
+
+/** Per device chat: when it was last open here, so the strip can mark one that has news. */
+const THREAD_SEEN_KEY = "nanomuse_thread_seen";
+
+function readThreadSeen(): Record<string, string> {
+  try {
+    const raw = readStorage(THREAD_SEEN_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeThreadSeen(map: Record<string, string>): void {
+  writeStorage(THREAD_SEEN_KEY, JSON.stringify(map));
+}
 /** The browser stepped past the sign-in door for a key of its own. */
 const SIGN_IN_SKIPPED_KEY = "nanomuse_sign_in_skipped";
 
@@ -112,6 +129,8 @@ export interface AppState {
   feedVersion: number;
   /** ISO time of the newest Feed item you have looked at. */
   feedSeenAt: string;
+  /** Per device chat, when it was last open here (see `hasNews` in device-strip.ts). */
+  threadSeen: Record<string, string>;
   /** Path of the workspace file open in the viewer, if any. */
   viewer: string | null;
   /** Text to put in the chat composer next time it shows (e.g. "/weekly-review "). */
@@ -182,6 +201,8 @@ type Action =
   | { type: "tab"; tab: Tab }
   | { type: "drawer"; open: boolean }
   | { type: "feedSeen"; at: string }
+  /** A device's chat was opened: remember up to when, so the strip can say when more arrived. */
+  | { type: "threadSeen"; thread: string; at: string }
   | { type: "viewer"; path: string | null }
   | { type: "draft"; text: string | null }
   | { type: "draftFiles"; files: AttachmentInfo[] | null }
@@ -232,6 +253,7 @@ const initial: AppState = {
   pendingApprovals: [],
   feedVersion: 0,
   feedSeenAt: readStorage(FEED_SEEN_KEY) ?? "",
+  threadSeen: readThreadSeen(),
   viewer: null,
   draft: null,
   draftFiles: null,
@@ -378,6 +400,11 @@ function reducer(state: AppState, action: Action): AppState {
     case "feedSeen":
       writeStorage(FEED_SEEN_KEY, action.at);
       return { ...state, feedSeenAt: action.at };
+    case "threadSeen": {
+      const next = { ...state.threadSeen, [action.thread]: action.at };
+      writeThreadSeen(next);
+      return { ...state, threadSeen: next };
+    }
     case "viewer":
       return { ...state, viewer: action.path };
     case "draft":

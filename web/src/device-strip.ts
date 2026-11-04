@@ -26,22 +26,20 @@ export interface DeviceFace {
   thread: string | null;
 }
 
-/** The row as the header draws it: the face in the middle, and the ones on either side of it. */
-export interface FaceRow {
-  /** The device whose chat is open, or null when the chat goes nowhere in particular. */
-  middle: DeviceFace | null;
-  left: DeviceFace[];
-  right: DeviceFace[];
-}
-
 /**
- * Every Muse of the account, in the order the row draws them: the one whose chat is open first,
- * then the online ones by name, then the sleeping ones.
+ * Every Muse of the account, in the order the row holds them: this device first, then the online
+ * ones by name, then the sleeping ones.
  *
- * The device this runtime runs on is among them (the relay marks it `this`), and so is the
- * browser page itself when signed in as the same account: the row is the account's Muses, and
- * the one whose chat is open is one of them rather than a special case beside them. Picking it
- * is how a chat goes back to being this device's own.
+ * The order is the same whatever chat is open, and that is the point of it. The row is a window
+ * on a longer strip that rolls sideways, so where a face sits in it is what makes the roll
+ * visible: an order that answered "whose chat is open" would put that face at one end every
+ * time, the window would never have to move, and a tap would look like the row rearranging
+ * itself rather than the strip being turned. The phone draws the same order for the same reason
+ * (`DeviceStrip.muses`), so a pick rolls the same way on both.
+ *
+ * The device this runtime runs on is among them (the relay marks it `this`): the row is the
+ * account's Muses, and the one being held is one of them rather than a special case beside them.
+ * Picking it is how a chat goes back to being this device's own.
  *
  * Browser *tabs* are left out (nothing there to talk to), and so is a nameless entry.
  */
@@ -49,16 +47,13 @@ export function muses(
   devices: readonly HubDevice[],
   opts: { chatDevice?: string; threads?: readonly { id: string; device?: string }[] } = {},
 ): DeviceFace[] {
-  const chatDevice = opts.chatDevice ?? "";
   const threads = opts.threads ?? [];
   const threadOf = (d: HubDevice): string | null => threads.find((t) => t.device === d.id)?.id ?? null;
   return devices
     .filter((d) => d.kind !== "web" && d.name.trim() !== "")
+    .slice()
     .sort((a, b) => {
-      const fa = a.id === chatDevice ? 0 : 1;
-      const fb = b.id === chatDevice ? 0 : 1;
-      if (fa !== fb) return fa - fb;
-      // this device first among the rest: it is the one being held
+      // this device first: it is the one being held
       if (!!a.this !== !!b.this) return a.this ? -1 : 1;
       if (a.online !== b.online) return a.online ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -67,28 +62,42 @@ export function muses(
 }
 
 /**
- * The row split around the middle face: the one whose chat is open, and the rest by count, the
- * first half to the left and the rest to the right.
+ * The face the row draws large in the middle: the device the open chat is addressed to, or — when
+ * the chat goes nowhere in particular (the main chat, a side chat) — this device, since a chat
+ * with no device open is this device's own. Null only when the account has no device at all.
  *
- * The split is by count so the two sides are of like width and the middle face stays in the
- * middle of the bar; nothing about the devices decides it. When the chat goes nowhere in
- * particular (the main chat, a side chat) there is no middle face and every device is on the
- * sides, which is the honest drawing: nothing is open, so nothing is enlarged.
+ * This is the face the strip rolls to, so it is the one decision the roll depends on; it lives
+ * here rather than in the view so it can be checked without a renderer.
  */
-export function faceRow(
+export function focusedFace(
   devices: readonly HubDevice[],
   opts: { chatDevice?: string; threads?: readonly { id: string; device?: string }[] } = {},
-): FaceRow {
+): DeviceFace | null {
   const everyone = muses(devices, opts);
-  // the chat's own device, or this device when the chat goes nowhere in particular: a chat with
-  // no device open is this device's own chat, so its face is the one in the middle
-  const middle =
+  return (
     everyone.find((f) => f.device.id === (opts.chatDevice ?? "")) ??
     everyone.find((f) => f.device.this) ??
-    null;
-  const rest = everyone.filter((f) => f.device.id !== middle?.device.id);
-  const half = Math.ceil(rest.length / 2);
-  return { middle, left: rest.slice(0, half), right: rest.slice(half) };
+    null
+  );
+}
+
+/**
+ * Whether a device's chat holds a reply the person has not looked at yet, from the chat's own
+ * last-write time and the last time that chat was open here.
+ *
+ * A device's chat is a place replies arrive while nobody is looking at it — the whole point of
+ * walking away from it — so the strip is where "there is something to read there" has to be
+ * said, or the only way to learn it is to open each one in turn. `updated_at` and the remembered
+ * moment are both the runtime's own ISO strings, so comparing them as text is comparing them as
+ * times.
+ */
+export function hasNews(
+  thread: { updated_at?: string } | undefined | null,
+  seenAt: string | undefined,
+): boolean {
+  const at = thread?.updated_at;
+  if (!at) return false;
+  return !seenAt || at > seenAt;
 }
 
 /**

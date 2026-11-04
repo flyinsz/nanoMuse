@@ -18,11 +18,11 @@
  * Offline devices are drawn, faint rather than hidden: one that is merely asleep is still the
  * person's, and a tap says so rather than opening a chat that cannot answer.
  */
-import { Monitor, Smartphone } from "lucide-react";
+import { Loader2, Monitor, Smartphone } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
 import { useT } from "../i18n";
-import { centringScroll, faceRow, type DeviceFace } from "../device-strip";
+import { centringScroll, focusedFace, hasNews, muses, type DeviceFace } from "../device-strip";
 import type { HubDevice } from "../types";
 import { api } from "../api";
 import { cx } from "../util";
@@ -31,28 +31,35 @@ import { cx } from "../util";
 function Face({
   face,
   focused,
+  busy,
+  news,
   onClick,
   label,
   name,
 }: {
   face: DeviceFace;
   focused: boolean;
+  /** this device's chat has a turn under way: the disc wears the spinner */
+  busy: boolean;
+  /** this device's chat holds a reply the person has not read yet */
+  news: boolean;
   onClick: () => void;
   label: string;
   /** what the strip writes under the disc: "This device" for the one being held */
   name: string;
 }) {
   const d = face.device;
+  const t = useT();
   return (
     <button
       type="button"
       onClick={onClick}
       title={label}
       aria-current={focused ? "true" : undefined}
-      className="flex w-[58px] shrink-0 flex-col items-center gap-0.5"
+      className="relative flex w-[58px] shrink-0 flex-col items-center gap-0.5"
     >
       {/* the slot is one size whatever the disc does, so nothing beside it shifts as one grows */}
-      <span className="flex h-[46px] items-center justify-center">
+      <span className="relative flex h-[46px] items-center justify-center">
         <span
           className={cx(
             "flex h-[46px] w-[46px] items-center justify-center rounded-full border transition-transform duration-300 ease-out",
@@ -65,6 +72,23 @@ function Face({
         >
           {d.kind === "phone" ? <Smartphone size={22} /> : <Monitor size={22} />}
         </span>
+        {/* A turn under way on that device reads here too, not just in its own chat: the strip is
+            where the person sees who is doing what without opening each one. Drawn on the disc's
+            own corner rather than the slot's, so it rides the disc as it grows. */}
+        {busy && (
+          <span className="absolute right-1 top-0 z-10 flex h-4 w-4 items-center justify-center rounded-full border border-bg bg-bg">
+            <Loader2 size={10} className="animate-spin text-accent" />
+          </span>
+        )}
+        {/* Something arrived in that device's chat while it was not being read. Drawn where the
+            spinner is not, so the two cannot sit on top of each other: work under way is the
+            more urgent of the two and the one that disappears on its own. */}
+        {news && !busy && (
+          <span
+            aria-label={t("New messages")}
+            className="absolute right-1 top-0 z-10 h-2.5 w-2.5 rounded-full border border-bg bg-accent"
+          />
+        )}
       </span>
       <span
         className={cx(
@@ -107,40 +131,44 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
     return [{ id: self.id, name: self.name, kind: self.kind, online: true, this: true }, ...others];
   }, [state.hub?.device, state.hub?.devices]);
 
-  const row = faceRow(everyone, { chatDevice, threads: state.threads });
+  // The row in the order it is held, the same whatever chat is open, plus the face to draw large.
+  // The order must not depend on the open chat: it is what the roll moves *over*, so an order
+  // that rearranged itself around the picked face would leave that face in the same slot every
+  // time, the strip would have nowhere to scroll, and a tap would look like the row shuffling
+  // rather than being turned. The phone holds the same order (DeviceStrip.muses).
+  const row = muses(everyone, { threads: state.threads });
+  const focused = focusedFace(everyone, { chatDevice, threads: state.threads });
 
-  // Extracted so the effect's dependency list is three plain values eslint can check.
-  const middleId = row.middle?.device.id ?? "";
-  const sideCount = row.left.length + row.right.length;
+  // Extracted so the effect's dependency list is plain values eslint can check.
+  const focusedId = focused?.device.id ?? "";
+  const rowCount = row.length;
 
-  // Bumped on every pick, so the roll below runs even when the *middle* does not change. That
-  // is the ordinary case: picking the device already in the middle, or picking this page's own
-  // face while it is already the middle one, moves the strip nowhere else and would otherwise
-  // leave the effect's dependencies untouched and the roll unfired.
+  // Bumped on every pick, so the roll below runs even when the face to centre is already the one
+  // in the middle — the common case, and the one that would otherwise leave the effect's
+  // dependencies untouched and the roll unfired.
   const [pick, setPick] = useState(0);
 
-  // Roll the device whose chat is open to the middle of the strip. The first fit lands it
-  // without a scroll so a chat that opens on a device does not slide under the reader's eyes;
-  // every pick after that animates.
+  // Roll the strip until the face of the open chat's device is the middle one. The first fit
+  // lands it without a scroll so a chat that opens on a device does not slide under the reader's
+  // eyes; every pick after that animates.
   //
   // The distance comes from `centringScroll` (src/device-strip.ts), which works from the two
-  // boxes' screens coordinates: neither `scrollIntoView({ inline: "center" })` nor
+  // boxes' screen coordinates: neither `scrollIntoView({ inline: "center" })` nor
   // `element.offsetLeft` is right here — the first resolves "centre" against the nearest
   // scrollable ancestor differently in every engine, the second is measured from the offset
   // parent, which a flex row does not establish. The rule lives there so it can be checked
-  // without a browser, which is what the two earlier attempts at this were not.
+  // without a browser.
   useEffect(() => {
     const box = strip.current;
     if (!box) return;
     const el = box.querySelector<HTMLElement>('[aria-current="true"]');
     if (!el) return;
-    // The very first fit lands without scrolling — a chat that opens on a device should not
-    // slide under the reader's eyes. Everything after that rolls, including a pick of the device
-    // already in the middle (that is what `pick` is for): a tap should always be answered by
-    // the strip moving, and "it is already centred" is only true of where it sits, not of the
-    // fact that the person just asked for it.
+    // The very first fit lands without scrolling — a chat that opens on a device should not slide
+    // under the reader's eyes. Everything after that rolls, including a pick of the face already
+    // centred (that is what `pick` is for): a tap should always be answered by the strip moving,
+    // and "it is already centred" describes where it sits, not the fact that someone just asked.
     const first = lastFocused === undefined;
-    lastFocused = middleId;
+    lastFocused = focusedId;
     const b = box.getBoundingClientRect();
     const f = el.getBoundingClientRect();
     const left = centringScroll({
@@ -152,9 +180,25 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
       contentWidth: box.scrollWidth,
     });
     box.scrollTo({ left, behavior: first ? "auto" : "smooth" });
-    // `pick` is what makes a pick of the device already in the middle roll too; the other two
-    // cover the row itself changing (a device appears or leaves, or the chat's device changes)
-  }, [middleId, sideCount, pick]);
+  }, [focusedId, rowCount, pick]);
+
+  // Whether that device has a turn under way right now: either its own chat is busy here (the
+  // runtime runs the turn and says so on that thread), or another device reported working on a
+  // synced chat (contract C9) — the same two sources the chat itself draws its working line
+  // from, so the disc and the line cannot disagree about who is thinking.
+  const busyOf = (f: DeviceFace): boolean => {
+    const chatOf = f.thread;
+    if (chatOf && state.threads.find((th) => th.id === chatOf)?.busy) return true;
+    return Object.values(state.working).some((w) => w && w.device === f.device.id);
+  };
+
+  // Whether that device's chat holds a reply that arrived while it was not being read. The chat
+  // the person is looking at is always up to date (ChatScreen marks it seen when it opens and
+  // again as it grows), so this never marks the one in front of them.
+  const newsOf = (f: DeviceFace): boolean => {
+    if (!f.thread) return false;
+    return hasNews(state.threads.find((th) => th.id === f.thread), state.threadSeen[f.thread]);
+  };
 
   const open = useCallback(
     async (face: DeviceFace) => {
@@ -189,7 +233,7 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
     [dispatch, t, toast],
   );
 
-  if (!row.middle && row.left.length + row.right.length === 0) return null;
+  if (row.length === 0) return null;
 
   const label = (f: DeviceFace) =>
     f.device.online ? t("Open the chat with {device}", { device: f.device.name }) : t("{device} is offline", { device: f.device.name });
@@ -211,15 +255,16 @@ export function DeviceFaces({ chatDevice }: { chatDevice: string }) {
           middle too. It is half the strip rather than a fixed slice of the viewport: two 40vw
           ends left only 20vw of room for the devices to overflow into, so on a wide window with
           a few devices the strip never overflowed at all and "roll to the middle" had nothing to
-          scroll — which is why the console never rolled while the phone always did (there the
-          slack is `(viewport - slot) / 2` and the content is always wider than its box). At half
-          the width the same is true here, and the roll is the same gesture on both. */}
+          scroll. At half the width the content is always wider than its box, as it is on the
+          phone, and the roll is the same gesture on both. */}
       <span aria-hidden className="w-1/2 shrink-0" />
-      {[...row.left, ...(row.middle ? [row.middle] : []), ...row.right].map((f) => (
+      {row.map((f) => (
         <Face
           key={f.device.id}
           face={f}
-          focused={f.device.id === row.middle?.device.id}
+          focused={f.device.id === focusedId}
+          busy={busyOf(f)}
+          news={newsOf(f)}
           onClick={() => void open(f)}
           label={label(f)}
           name={name(f)}

@@ -3451,6 +3451,16 @@ class ChatViewModel(
         val sid = realSessionId.ifEmpty { sessionId }
         _nmAimedDevice.value =
             if (sid.isBlank()) "" else io.github.nanomuse.terminal.DeviceAim.id(context, sid) ?: ""
+        // nanoMuse: this chat is open, so whatever arrived in it has been looked at — the strip
+        // stops marking its device as having news (DeviceNews). Marked here, where the chat's own
+        // row is already being read for its aim, rather than from a second place that would then
+        // have to be kept in step with this one.
+        if (sid.isNotBlank()) {
+            viewModelScope.launch {
+                val at = runCatching { chatRepository.dao.getSession(sid)?.updatedAt }.getOrNull()
+                if (at != null) io.github.nanomuse.terminal.DeviceNews.markSeen(context, sid, at)
+            }
+        }
     }
 
     /**
@@ -3483,6 +3493,10 @@ class ChatViewModel(
         // for this case either — its `hub_ask` resolves a device through the list of the *other*
         // ones, so asking for this phone answers "no device matches".
         if (device.isThis) {
+            // The face of the phone is drawn large by the strip itself once this chat is the one
+            // shown (nmDeviceFaces resolves a blank aim to this phone), so nothing is cleared
+            // here: the aim belongs to the chat being left, and clearing it would bring the
+            // device chat back un-aimed the next time it is opened.
             io.github.nanomuse.ui.home.HomeBus.showMain()
             return
         }

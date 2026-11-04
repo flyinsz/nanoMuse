@@ -176,6 +176,16 @@ export function ChatScreen() {
     if (stickToBottom.current) pin();
   }, [events, stream?.text, activeThread, pin]);
 
+  // nanoMuse: this chat is open, so whatever had arrived in it has been looked at — the strip
+  // stops marking it (DeviceFaces reads `state.threadSeen`). Keyed on the thread and on its own
+  // last-write time so a reply that lands while the chat is being read is marked seen too,
+  // rather than leaving a badge on the chat the person is looking at.
+  useEffect(() => {
+    const at = thread?.updated_at;
+    if (!at || state.threadSeen[activeThread] === at) return;
+    dispatch({ type: "threadSeen", thread: activeThread, at });
+  }, [activeThread, thread?.updated_at, state.threadSeen, dispatch]);
+
   useEffect(() => {
     const el = listRef.current;
     const content = contentRef.current;

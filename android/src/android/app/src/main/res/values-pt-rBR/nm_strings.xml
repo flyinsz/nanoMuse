@@ -1232,4 +1232,5 @@
     <string name="nm_device_chat_title">→ %1$s</string>
     <string name="nm_device_offline_now">%1$s is not connected right now.</string>
     <!-- The device strip's label for the device being held (nm_device_this). -->    <string name="nm_device_this">Este dispositivo</string>
+    <string name="nm_device_has_news">Mensagens novas</string>
 </resources>

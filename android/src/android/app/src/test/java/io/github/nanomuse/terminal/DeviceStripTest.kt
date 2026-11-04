@@ -2,6 +2,7 @@ package io.github.nanomuse.terminal
 
 import io.github.nanomuse.hub.Device
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -204,5 +205,38 @@ class DeviceStripTest {
     fun the_other_muses_are_not_marked_as_this_one() {
         val others = DeviceStrip.muses(devices).filter { it.hubId != "phone-1" }
         assertTrue(others.none { it.isThis })
+    }
+
+    // ── which face is drawn large ────────────────────────────────────────────────────
+
+    @Test
+    fun a_blank_aim_puts_this_phones_face_in_front() {
+        // The main chat has no device of its own, so its aim is blank — and the main chat *is*
+        // this phone's chat, so its face is the one that must be drawn large. Matching a blank id
+        // against the list finds nobody, which is how the phone's own face ended up with no ring.
+        val i = DeviceStrip.focusIndex(devices, focusedHubId = "")
+        assertEquals("phone-1", DeviceStrip.muses(devices)[i].hubId)
+    }
+
+    @Test
+    fun an_aim_at_a_device_puts_that_device_in_front() {
+        val i = DeviceStrip.focusIndex(devices, focusedHubId = "mac-1")
+        assertEquals("mac-1", DeviceStrip.muses(devices)[i].hubId)
+    }
+
+    @Test
+    fun an_aim_at_a_device_that_left_falls_back_to_this_phone() {
+        val i = DeviceStrip.focusIndex(devices, focusedHubId = "gone-1")
+        assertEquals("phone-1", DeviceStrip.muses(devices)[i].hubId)
+    }
+
+    @Test
+    fun the_face_in_front_moves_as_the_chat_changes() {
+        // the roll exists because picking another device moves the face drawn large; if it always
+        // landed on the same position there would be nothing for the strip to scroll
+        assertNotEquals(
+            DeviceStrip.focusIndex(devices, "mac-1"),
+            DeviceStrip.focusIndex(devices, ""),
+        )
     }
 }

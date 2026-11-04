@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { centringScroll, faceRow, muses } from "./device-strip";
+import { centringScroll, focusedFace, hasNews, muses } from "./device-strip";
 import type { HubDevice } from "./types";
 
 /**
- * The account's Muses as the header's row of faces: which are drawn, in what order, and which
- * one is in the middle. The rules both clients share.
+ * The account's Muses as the strip holds them: which are drawn, in what order, and which one is
+ * drawn large in the middle. The rules both clients share.
  *
- * Every device wears the same face (the profile is one per account), so the row is not about
+ * Every device wears the same face (the profile is one per account), so the strip is not about
  * telling faces apart: it is about who is there, and whose chat is open.
  */
 const devices: HubDevice[] = [
@@ -25,7 +25,7 @@ describe("muses", () => {
     expect(ids).not.toContain("tab");
   });
 
-  it("puts this device first among the ones that are not open", () => {
+  it("puts this device first", () => {
     expect(muses(devices)[0].device.id).toBe("me");
   });
 
@@ -35,8 +35,13 @@ describe("muses", () => {
     expect(ids.indexOf("off-1")).toBe(ids.length - 1);
   });
 
-  it("puts the open chat's device first", () => {
-    expect(muses(devices, { chatDevice: "ph-1" })[0].device.id).toBe("ph-1");
+  it("holds the same order whatever chat is open", () => {
+    // The order is what the roll moves over. Were it to answer "whose chat is open", the face
+    // being picked would sit at the same end every time, the strip would have nowhere to
+    // scroll, and a tap would look like the row shuffling rather than being turned — which is
+    // exactly how the console behaved while the phone rolled.
+    const open = muses(devices, { chatDevice: "ph-1" }).map((f) => f.device.id);
+    expect(open).toEqual(muses(devices).map((f) => f.device.id));
   });
 
   it("gives a device its chat back, so a tap returns to it", () => {
@@ -51,40 +56,66 @@ describe("muses", () => {
   });
 });
 
-describe("faceRow", () => {
-  it("puts the open chat's device in the middle", () => {
-    expect(faceRow(devices, { chatDevice: "srv-1" }).middle?.device.id).toBe("srv-1");
+describe("focusedFace", () => {
+  it("is the open chat's device", () => {
+    expect(focusedFace(devices, { chatDevice: "srv-1" })?.device.id).toBe("srv-1");
   });
 
-  it("draws this device in the middle when the chat goes nowhere in particular", () => {
-    expect(faceRow(devices).middle?.device.id).toBe("me");
-  });
-
-  it("does not draw the middle face on either side", () => {
-    const row = faceRow(devices, { chatDevice: "srv-1" });
-    expect([...row.left, ...row.right].map((f) => f.device.id)).not.toContain("srv-1");
-  });
-
-  it("draws every Muse exactly once", () => {
-    const row = faceRow(devices, { chatDevice: "srv-1" });
-    const drawn = [...row.left, ...row.right, ...(row.middle ? [row.middle] : [])].map((f) => f.device.id);
-    expect(drawn.length).toBe(new Set(drawn).size);
-    expect(drawn.length).toBe(muses(devices).length);
-  });
-
-  it("keeps the two sides within one of each other", () => {
-    const row = faceRow(devices, { chatDevice: "srv-1" });
-    expect(Math.abs(row.left.length - row.right.length)).toBeLessThanOrEqual(1);
+  it("is this device when the chat goes nowhere in particular", () => {
+    expect(focusedFace(devices)?.device.id).toBe("me");
   });
 
   it("falls back to this device when the chat's device is gone", () => {
-    expect(faceRow(devices, { chatDevice: "gone-1" }).middle?.device.id).toBe("me");
+    expect(focusedFace(devices, { chatDevice: "gone-1" })?.device.id).toBe("me");
   });
 
-  it("splits into two empty sides when there is no device", () => {
-    const row = faceRow([]);
-    expect(row.middle).toBeNull();
-    expect(row.left.length + row.right.length).toBe(0);
+  it("is null when the account has no device to draw", () => {
+    expect(focusedFace([])).toBeNull();
+  });
+
+  it("sits somewhere different in the row as the chat changes", () => {
+    // The roll exists because picking another device *moves* the face being drawn large. If the
+    // focused face always landed on the same slot there would be nothing to scroll, so this is
+    // the property the whole gesture rests on.
+    const order = muses(devices).map((f) => f.device.id);
+    const at = (id?: string) => order.indexOf(focusedFace(devices, { chatDevice: id })?.device.id ?? "");
+    expect(at("ph-1")).not.toBe(at("me"));
+  });
+});
+
+/**
+ * Whether a device's chat holds something unread. The strip is the only place that can say so —
+ * a reply lands in a chat nobody is looking at, which is the whole point of walking away from it
+ * — so the rule is worth pinning down: it must not mark the chat being read, and it must mark one
+ * the person has never opened.
+ */
+describe("hasNews", () => {
+  it("marks a chat that has never been opened", () => {
+    expect(hasNews({ updated_at: "2026-11-04T10:00:00Z" }, undefined)).toBe(true);
+  });
+
+  it("marks a chat that moved on since it was last read", () => {
+    expect(hasNews({ updated_at: "2026-11-04T10:00:00Z" }, "2026-11-04T09:00:00Z")).toBe(true);
+  });
+
+  it("leaves a chat alone once it has been read to its latest message", () => {
+    expect(hasNews({ updated_at: "2026-11-04T10:00:00Z" }, "2026-11-04T10:00:00Z")).toBe(false);
+  });
+
+  it("does not mark a chat that only has an older message than was read", () => {
+    // this is the chat the person is looking at: marking it would put a badge on the one thing
+    // they can already see
+    expect(hasNews({ updated_at: "2026-11-04T09:00:00Z" }, "2026-11-04T10:00:00Z")).toBe(false);
+  });
+
+  it("does not mark a device that has no chat at all", () => {
+    expect(hasNews(undefined, undefined)).toBe(false);
+    expect(hasNews(null, "2026-11-04T10:00:00Z")).toBe(false);
+  });
+
+  it("does not mark a chat with no timestamp to compare", () => {
+    expect(hasNews({}, undefined)).toBe(false);
+    expect(hasNews({ updated_at: "" }, undefined)).toBe(false);
   });
 });
 

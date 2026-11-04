@@ -52,6 +52,25 @@ object DeviceStrip {
         .map(::asComputer)
 
     /**
+     * The device whose face the strip draws large, as a position in [all]'s own order, or -1 when
+     * there is nothing to draw.
+     *
+     * [focusedHubId] is the device the open chat is addressed to, and blank means the phone
+     * itself: a chat with no device of its own is this phone's chat, so *its* face is the one in
+     * front. Resolving the blank here is what keeps the phone's own face drawn large in the main
+     * chat — matching a blank id against the list finds nobody, and the strip would draw every
+     * face at its idle size with nothing in front.
+     */
+    fun focusIndex(all: List<Device>, focusedHubId: String): Int {
+        val everyone = muses(all)
+        if (focusedHubId.isNotBlank()) {
+            val i = everyone.indexOfFirst { it.hubId == focusedHubId }
+            if (i >= 0) return i
+        }
+        return everyone.indexOfFirst { it.isThis }
+    }
+
+    /**
      * The row as the header draws it: the face in the middle, the faces to its left, and the
      * faces to its right. [focusedHubId] is the device the open chat is addressed to, or empty
      * for the phone itself, which is the middle face in that case.
