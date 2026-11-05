@@ -1443,12 +1443,19 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
    the row scrolling sideways with no visible bar (a pick is what turns it, not a drag).
    A disc carries a laptop or a phone, not the agent's face: the profile is one per account, so
    every device wears the identical face and a face would not say which disc is which. */
-.nm-device-row { display: flex; align-items: center; margin: 0 0 8px; }
-.nm-device-row-box { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.nm-device-row { display: flex; align-items: center; width: 100%; min-width: 0; margin: 0 0 8px; }
+/* flex: 1 and min-width: 0 are what make this a window on a longer strip rather than a box that
+   fits its contents: without them a flex item takes its content's width, the strip never
+   overflows, scrollWidth == clientWidth, the roll clamps to 0 every time, and the row can neither
+   be turned nor hold anything in the middle. The browser default min-width: auto on a flex item
+   would also refuse to shrink below its content, so it is stated rather than left out. */
+.nm-device-row-box { flex: 1 1 0; min-width: 0; display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .nm-device-row-box::-webkit-scrollbar { display: none; }
-/* Half a slot of slack each end, so the first and last disc can reach the middle too. Without it
-   a short account never overflows and the roll has nothing to scroll. */
-.nm-device-row-slack { flex: none; width: 50%; }
+/* Half a strip of slack on each end, so the first and the last disc can reach the middle too.
+   Without it a short account never overflows and "roll to the middle" has nothing to scroll. The
+   minimum keeps a real slack on a narrow window, where a bare 50 % of the box would leave the
+   discs almost no room to be scrolled into. */
+.nm-device-row-slack { flex: none; width: 50%; min-width: 300px; }
 .nm-device-face { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; flex: none; padding: 3px 0 1px; border: 0; background: none; cursor: pointer; }
 /* The slot is the large size whatever the disc does, so nothing beside it shifts as one grows
    and the roll never changes the strip's own width under the person's eyes. */

@@ -11,13 +11,12 @@
  *   face says nothing about which disc stands for which device. The name under each disc says the
  *   rest, and this computer says "This computer" — the account's name for it is the same name
  *   every device wears, so under its own disc it would say nothing.
- * - **The row rolls.** Picking a device scrolls the strip until that disc is the middle one,
- *   growing to full size as it travels, so a tap reads as the strip being turned rather than the
- *   row rearranging itself. The first fit lands without animating, or a chat that opens on a
- *   device would slide under the person's eyes.
- * - **The disc in the middle is the one whose chat is open.** The current session's id
- *   (`win.current`) is matched against each device's own chat, so opening a device's chat
- *   elsewhere in the app leaves the right disc large.
+ * - **The row rolls.** The disc of the chat on screen is the middle one, drawn large as it
+ *   travels, so a pick reads as the strip being turned rather than the row rearranging itself.
+ * - **The disc in the middle is the one whose chat is open.** The chat on screen is matched
+ *   against each device's own chat, so opening a device's chat leaves the right disc large. Which
+ *   chat that is comes from the dock's own session seat first (`sessionId` — the seat *is* the
+ *   chat), with the window store as the fallback.
  *
  * The third answer a tap can have is this client's own. The phone and the console open the
  * device's chat and put a message on the wire; this is a DSH plugin, whose only way to reach
@@ -31,7 +30,7 @@
  */
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { faceLabel, centringScroll, focusedFace, muses, newsIds, pickable, tapIntent, type RowFace } from './device-row.ts'
-import { IconLaptop, IconPhone, IconSpinner } from './icons.tsx'
+import { IconLaptop, IconPhone } from './icons.tsx'
 import { useLive } from './live.ts'
 import { useWin } from './win.ts'
 import type { Translate } from './api.ts'
@@ -44,19 +43,35 @@ const DISC = 40
 const SHRUNK = 0.62
 const SLOT = DISC + 10
 
+/**
+ * The device the row was last fitted to, or undefined before the first fit.
+ *
+ * Kept outside the component on purpose, exactly as the console does it: a pick opens another
+ * chat, and the shell rebuilds the composer subtree along with it, so a ref inside would be born
+ * fresh on every pick — every roll would then look like a first fit and land without animating,
+ * and a pick would never be answered by the strip moving.
+ */
+let lastFitted: string | undefined
+
 export interface DeviceRowProps {
   t: Translate
   /** Open a device's chat (making it if new), with `@name` already in the box. */
   openChat?: ((deviceId: string, name: string) => void) | undefined
   /** Show a question from another device — the newest one that device is waiting on. */
   showAsk?: ((askId: string) => void) | undefined
+  /**
+   * The chat on screen, as the dock's own session seat reports it. `conversation.input.dock` is a
+   * session-scope slot, so the shell hands this down; it is the seat that *is* the chat, where
+   * `win.current` is written by another seat and only once that one's effect has run.
+   */
+  sessionId?: string | null | undefined
 }
 
 /**
  * The row. Null when the account has only this computer: a row of one disc says nothing about who
  * else there is, and the header already says whose chat is open.
  */
-export function DeviceRow({ t, openChat, showAsk }: DeviceRowProps): ReactNode {
+export function DeviceRow({ t, openChat, showAsk, sessionId }: DeviceRowProps): ReactNode {
   const live = useLive()
   const win = useWin()
   const box = useRef<HTMLDivElement | null>(null)
@@ -65,14 +80,15 @@ export function DeviceRow({ t, openChat, showAsk }: DeviceRowProps): ReactNode {
     [live.hub.devices, live.hub.deviceId, live.hub.deviceChats],
   )
   const news = useMemo(() => newsIds(live.hub.asks, faces), [live.hub.asks, faces])
-  const big = focusedFace(faces, win.current)
+  // The chat on screen: the seat's own word first, the store as the fallback. The store is only
+  // written once a different seat (the header's utilities) has mounted and run its effect, so on
+  // the frame a chat opens it still names the previous one — the seat is never behind.
+  const openChatNow = sessionId ?? win.current
+  const big = focusedFace(faces, openChatNow)
   // Bumped on every pick, so the roll runs even when the disc to centre is already the middle one
-  // — the common case, and the one that would otherwise leave the effect unfired and a tap
+  // — the common case, and the one that would otherwise leave the effect unfired and a pick
   // unanswered by any movement.
   const [pick, setPick] = useState(0)
-  // The first fit lands without animating: a chat opening on a device must not slide under the
-  // reader's eyes. Everything after that rolls.
-  const firstFit = useRef(true)
 
   useEffect(() => {
     const el = box.current
@@ -89,9 +105,11 @@ export function DeviceRow({ t, openChat, showAsk }: DeviceRowProps): ReactNode {
       scrollLeft: el.scrollLeft,
       contentWidth: el.scrollWidth,
     })
-    const smooth = !firstFit.current
-    firstFit.current = false
-    el.scrollTo({ left, behavior: smooth ? 'smooth' : 'auto' })
+    // The first fit lands without animating: a chat opening on a device must not slide under the
+    // reader's eyes. Everything after that rolls.
+    const first = lastFitted === undefined
+    lastFitted = big.device.id
+    el.scrollTo({ left, behavior: first ? 'auto' : 'smooth' })
   }, [big, pick, faces.length])
 
   const pick_ = useCallback(
@@ -170,9 +188,13 @@ export function makeDeviceRow(
   openChat?: ((deviceId: string, name: string) => void) | undefined,
   showAsk?: ((askId: string) => void) | undefined,
 ) {
-  return function DeviceRowSlot(): ReactNode {
+  // The dock is a session-scope slot, so the shell hands the chat on screen down as `sessionId`.
+  // Read it off the props rather than through the window store: the store is written by the
+  // header's own seat, which mounts beside this one, so on the frame a chat opens it still names
+  // the chat before it (measured: `win` empty while this seat already had the right id).
+  return function DeviceRowSlot(props?: { sessionId?: string | undefined } | undefined): ReactNode {
     const live = useLive()
     if (!live.hub.connected || live.hub.devices.length === 0) return null
-    return h(DeviceRow, { t, openChat, showAsk })
+    return h(DeviceRow, { t, openChat, showAsk, sessionId: props?.sessionId ?? null })
   }
 }

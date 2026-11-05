@@ -187,3 +187,32 @@ test('the roll accounts for where the box is already scrolled to', () => {
   const left = centringScroll({ boxLeft: -300, boxWidth: 200, faceLeft: -100, faceWidth: 40, scrollLeft: 300, contentWidth: 1000 })
   assert.equal(left, 420)
 })
+
+// ---- which chat is on screen ------------------------------------------------------------
+
+test('a device chat opened elsewhere leaves that device large, from the chat id alone', () => {
+  // What the dock's own session seat hands down: the id of the chat on screen. It is matched
+  // against each device's chat, so the row follows a chat opened from anywhere in the app.
+  const devices = [device({ id: 'me' }), device({ id: 'p1' }), device({ id: 'p2' })]
+  const row = muses(devices, 'me', { chatFor: (id) => (id === 'p2' ? 'session-2' : null) })
+  assert.equal(focusedFace(row, 'session-2')?.device.id, 'p2')
+})
+
+test('the chat on screen wins over this computer even when the store has nothing', () => {
+  // The window store is written by a different seat and can still be null on the frame a chat
+  // opens (measured: the seat had the right id while the store was empty). The row must not fall
+  // back to this computer while a chat with a device is what is actually on screen.
+  const devices = [device({ id: 'me' }), device({ id: 'p1' })]
+  const row = muses(devices, 'me', { chatFor: (id) => (id === 'p1' ? 'session-1' : null) })
+  assert.equal(focusedFace(row, 'session-1')?.device.id, 'p1')
+  assert.equal(focusedFace(row, null)?.device.id, 'me')
+})
+
+test('the order the roll moves over does not change when a device chat opens', () => {
+  // The roll needs the row to stay put: an order that answered "whose chat is open" would put
+  // the picked disc in the same slot every time and the window would never have to move.
+  const devices = [device({ id: 'me', name: 'Z' }), device({ id: 'a', name: 'Alpha' }), device({ id: 'b', name: 'Beta' })]
+  const before = muses(devices, 'me').map((f) => f.device.id)
+  const after = muses(devices, 'me', { chatFor: (id) => (id === 'b' ? 'session-b' : null) }).map((f) => f.device.id)
+  assert.deepEqual(before, after)
+})
