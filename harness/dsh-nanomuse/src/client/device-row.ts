@@ -146,16 +146,17 @@ export function newsIds(asks: readonly LiveAsk[], row: readonly RowFace[]): Set<
  * What a tap on a face asks the shell to do.
  *
  * `main` — show a chat of this computer's own, which is what picking this computer's face means
- * and how the person gets back out of a device's chat. `ask` — show the question that device is
- * waiting on, because a face wearing a dot has to lead to what the dot is about. `chat` — open
- * that device's own chat, making one if it has never had one, and which is the same trip the
- * phone and the console take.
+ * and how the person gets back out of a device's chat; it carries the chat to show, since "a chat
+ * of its own" is a particular session the shell has to be told. `ask` — show the question that
+ * device is waiting on, because a face wearing a dot has to lead to what the dot is about. `chat`
+ * — open that device's own chat, making one if it has never had one, and which is the same trip
+ * the phone and the console take.
  *
  * Picking this computer's face is deliberately *not* "close the device chat and make a new one":
  * a chat of its own already means "no target", so the tap only has to make sure one is showing.
  */
 export type FaceIntent =
-  | { kind: 'main' }
+  | { kind: 'main'; chat: string | null }
   | { kind: 'chat'; deviceId: string; name: string; chat: string | null }
   | { kind: 'ask'; deviceId: string }
 
@@ -164,14 +165,15 @@ export type FaceIntent =
  *
  * A device that asked here and is still waiting leads to that question first, whatever else is
  * true of it: a dot that did not open what it is about would point at nothing. This computer's own
- * face goes home. Every other device leads to its chat — the newest asker does not win over the
- * dot's own device, because the dot *is* the tap's answer for the device that asked.
+ * face goes home, to [mainChat] when the shell knows which chat that is. Every other device leads
+ * to its chat — the newest asker does not win over the dot's own device, because the dot *is* the
+ * tap's answer for the device that asked.
  */
-export function tapIntent(face: RowFace, asks: readonly LiveAsk[]): FaceIntent {
+export function tapIntent(face: RowFace, asks: readonly LiveAsk[], mainChat?: string | null): FaceIntent {
   if (!face.isThis && newestAskFrom(face.device.id, asks)) {
     return { kind: 'ask', deviceId: face.device.id }
   }
-  if (face.isThis) return { kind: 'main' }
+  if (face.isThis) return { kind: 'main', chat: mainChat ?? null }
   return { kind: 'chat', deviceId: face.device.id, name: face.device.name, chat: face.chat }
 }
 

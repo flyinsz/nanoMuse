@@ -91,7 +91,15 @@ test('no asks means no dots', () => {
 test('picking this computer goes home', () => {
   const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
   const me = row.find((f) => f.isThis)
-  assert.deepEqual(tapIntent(me, []), { kind: 'main' })
+  assert.deepEqual(tapIntent(me, []), { kind: 'main', chat: null })
+})
+
+test('going home names the chat to show, when the shell knows it', () => {
+  // "A chat of its own" is a particular session, so the tap carries it. `mainChat` is the same
+  // session the calls column treats as the main chat (the host's own, then the remembered one).
+  const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
+  const me = row.find((f) => f.isThis)
+  assert.deepEqual(tapIntent(me, [], 'session-main'), { kind: 'main', chat: 'session-main' })
 })
 
 test('picking another device opens that device\u2019s own chat', () => {
@@ -117,7 +125,7 @@ test('a device waiting on a question leads to that question, not to its chat', (
 test('a question does not divert this computer\u2019s own face from going home', () => {
   const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
   const me = row.find((f) => f.isThis)
-  assert.deepEqual(tapIntent(me, [ask({ fromId: 'me' })]), { kind: 'main' })
+  assert.deepEqual(tapIntent(me, [ask({ fromId: 'me' })], 'session-main'), { kind: 'main', chat: 'session-main' })
 })
 
 test('the newest question from a device is the one a dotted tap opens', () => {

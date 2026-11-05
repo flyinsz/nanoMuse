@@ -52,6 +52,8 @@ import { CONNECTORS_SECTION, makeConnectorsSection } from './Connectors.tsx'
 import { DICTATION_SECTION, FILES_SECTION, makeDictationSection, makeFilesSection, makePermissionsSection, PERMISSIONS_SECTION } from './Pages.tsx'
 import { makeTurnError } from './RefusalCard.tsx'
 import { CHANNELS_SECTION, COMPUTER_SECTION, createShellStore, DATA_SECTION, HARNESS_SECTION, HELP_SECTION, LEGAL_SECTION, makeGeneralSection, makeHarnessSection, MuseSettings, STORAGE_SECTION, WALLET_SECTION, type MuseSettingsProps, type OnboardingStep, type SectionRow } from './MuseSettings.tsx'
+import { peekLive } from './live.ts'
+import { mainChatId } from './MuseChats.tsx'
 import { MuseSidebar, type MuseSidebarProps, type PanelMeta } from './MuseSidebar.tsx'
 import { makeOnboarding, type OnboardingOwnerProps } from './Onboarding.tsx'
 import { DEVICES_PANEL, FEED_PANEL, GOALS_PANEL, IDEAS_PANEL, ISSUES_URL, LIBRARY_PANEL } from './panels.ts'
@@ -411,7 +413,8 @@ export function apply(ctx: ClientContext): void {
   // one per device, so the same pick returns to the same window — with `@name` already in its
   // box: talking to a device is the `@name` frame the composer already understands, and the chat
   // is where the person finishes the sentence. A device waiting on a question here wears a dot
-  // and a tap leads to that question instead.
+  // and a tap leads to that question instead, and this computer's own face goes home: that is the
+  // way back out of a device's chat, the only one the row offers.
   const DeviceRow = makeDeviceRow(
     t,
     (deviceId, name) => {
@@ -423,6 +426,11 @@ export function apply(ctx: ClientContext): void {
         .catch(() => undefined)
     },
     () => { shell.openSection(DEVICES_PANEL) },
+    (chatId) => { if (chatId) roomsNav.openSession(chatId) },
+    // This computer's own chat, the same two sources the calls column reads (C8): the session the
+    // account's main conversation lives in, then the one this computer remembered. Either can be
+    // absent before the host has answered, in which case the face rolls and stops where it is.
+    () => peekLive().sync?.mainSession || mainChatId() || null,
   )
   slots.inject('conversation.input.dock', () =>
     slots.register({ name: 'conversation.input.dock', id: 'nanomuse.devices', order: -7, locale: 'nanomuse' }, DeviceRow))

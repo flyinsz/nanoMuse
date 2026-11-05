@@ -59,19 +59,26 @@ export interface DeviceRowProps {
   openChat?: ((deviceId: string, name: string) => void) | undefined
   /** Show a question from another device — the newest one that device is waiting on. */
   showAsk?: ((askId: string) => void) | undefined
+  /** Show one of this computer's own chats: the way back out of a device's chat. */
+  openMain?: ((chatId: string | null) => void) | undefined
   /**
    * The chat on screen, as the dock's own session seat reports it. `conversation.input.dock` is a
    * session-scope slot, so the shell hands this down; it is the seat that *is* the chat, where
    * `win.current` is written by another seat and only once that one's effect has run.
    */
   sessionId?: string | null | undefined
+  /**
+   * This computer's own chat, for the face that leads home. Null while the shell does not know
+   * which chat that is yet, in which case the face still rolls and stops there.
+   */
+  mainChat?: string | null | undefined
 }
 
 /**
  * The row. Null when the account has only this computer: a row of one disc says nothing about who
  * else there is, and the header already says whose chat is open.
  */
-export function DeviceRow({ t, openChat, showAsk, sessionId }: DeviceRowProps): ReactNode {
+export function DeviceRow({ t, openChat, openMain, showAsk, sessionId, mainChat }: DeviceRowProps): ReactNode {
   const live = useLive()
   const win = useWin()
   const box = useRef<HTMLDivElement | null>(null)
@@ -116,18 +123,23 @@ export function DeviceRow({ t, openChat, showAsk, sessionId }: DeviceRowProps): 
     (face: RowFace) => {
       if (!pickable(face)) return
       setPick((n) => n + 1)
-      const intent = tapIntent(face, live.hub.asks)
+      const intent = tapIntent(face, live.hub.asks, mainChat)
       // A dotted face leads to the question the dot is about, or the dot points at nothing.
       if (intent.kind === 'ask') {
         showAsk?.(intent.deviceId)
         return
       }
-      // This computer's face goes home; the roll already answered "which disc is in front".
-      if (intent.kind === 'main') return
+      // This computer's face goes home — to the chat of its own the shell named, which is how the
+      // person gets back out of a device's chat. The roll above already answered "which disc is in
+      // front"; this is the other half of the same tap.
+      if (intent.kind === 'main') {
+        openMain?.(intent.chat)
+        return
+      }
       // Every other face opens that device's own chat, making one the first time.
       openChat?.(intent.deviceId, intent.name)
     },
-    [live.hub.asks, openChat, showAsk],
+    [live.hub.asks, mainChat, openChat, openMain, showAsk],
   )
 
   if (faces.length < 2) return null
@@ -187,6 +199,8 @@ export function makeDeviceRow(
   t: Translate,
   openChat?: ((deviceId: string, name: string) => void) | undefined,
   showAsk?: ((askId: string) => void) | undefined,
+  openMain?: ((chatId: string | null) => void) | undefined,
+  mainChatOf?: (() => string | null) | undefined,
 ) {
   // The dock is a session-scope slot, so the shell hands the chat on screen down as `sessionId`.
   // Read it off the props rather than through the window store: the store is written by the
@@ -195,6 +209,6 @@ export function makeDeviceRow(
   return function DeviceRowSlot(props?: { sessionId?: string | undefined } | undefined): ReactNode {
     const live = useLive()
     if (!live.hub.connected || live.hub.devices.length === 0) return null
-    return h(DeviceRow, { t, openChat, showAsk, sessionId: props?.sessionId ?? null })
+    return h(DeviceRow, { t, openChat, openMain, showAsk, sessionId: props?.sessionId ?? null, mainChat: mainChatOf?.() ?? null })
   }
 }
