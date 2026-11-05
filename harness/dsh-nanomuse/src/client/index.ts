@@ -406,11 +406,24 @@ export function apply(ctx: ClientContext): void {
   slots.inject('shell.overlay', () =>
     slots.register({ name: 'shell.overlay', id: 'nanomuse.device-task', locale: 'nanomuse' }, DeviceTaskCard))
   ctx.effect(() => interceptComposer(), 'nanomuse: avatar words')
-  // The account's Muses as one row above the composer: a tap puts `@name` in the box, which is
-  // the same trip typing it takes, and a device waiting on a question here wears a dot and leads
-  // to it. The row is the third client to draw this (`DeviceStrip` on the phone, `device-strip.ts`
-  // in the console); the decisions live in `device-row.ts`.
-  const DeviceRow = makeDeviceRow(t, () => { shell.openSection(DEVICES_PANEL) })
+  // The account's Muses as one row above the composer (Android's `DeviceStrip`, the console's
+  // `device-strip.ts`; the rules are in `device-row.ts`). A tap opens that device's own chat —
+  // one per device, so the same pick returns to the same window — with `@name` already in its
+  // box: talking to a device is the `@name` frame the composer already understands, and the chat
+  // is where the person finishes the sentence. A device waiting on a question here wears a dot
+  // and a tap leads to that question instead.
+  const DeviceRow = makeDeviceRow(
+    t,
+    (deviceId, name) => {
+      void roomsCall<{ sessionId: string }>('devices/open-chat', { deviceId, name })
+        .then(({ sessionId }) => {
+          roomsNav.openSession(sessionId)
+          prefillComposer(`@${name} `)
+        })
+        .catch(() => undefined)
+    },
+    () => { shell.openSection(DEVICES_PANEL) },
+  )
   slots.inject('conversation.input.dock', () =>
     slots.register({ name: 'conversation.input.dock', id: 'nanomuse.devices', order: -7, locale: 'nanomuse' }, DeviceRow))
   // The microphone at the right of the composer; "reply with a quote" beside Copy.

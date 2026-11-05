@@ -3,45 +3,77 @@
  *
  * The phone and the web console each draw this row (Android's `DeviceStrip` + `DeviceFacesRow`,
  * the console's `DeviceFaces.tsx`); the desktop had none, so a device could only be reached by
- * typing its name into the box. Same row, third client: every device of the account as a small
- * disc, the one this app runs on large in the middle, a dot on a device that is waiting on a
- * question here, and a tap that puts that device's `@name` in the composer.
+ * typing its name into the box. Same row, third client — and drawn the same way as the other two,
+ * which is the point of it being one row in three places rather than three rows:
  *
- * Why here and not over the box. The composer's dock is where this app already says things about
- * the chat being written in (the wait line, the allowance note), and the row is not part of the
- * message — it is who the message can go to. Above the box: one glance, one tap.
+ * - **A disc is a device, not the agent.** The disc carries a laptop or a phone icon, not the
+ *   agent's face: the profile is one per *account*, so every device wears the identical face and a
+ *   face says nothing about which disc stands for which device. The name under each disc says the
+ *   rest, and this computer says "This computer" — the account's name for it is the same name
+ *   every device wears, so under its own disc it would say nothing.
+ * - **The row rolls.** Picking a device scrolls the strip until that disc is the middle one,
+ *   growing to full size as it travels, so a tap reads as the strip being turned rather than the
+ *   row rearranging itself. The first fit lands without animating, or a chat that opens on a
+ *   device would slide under the person's eyes.
+ * - **The disc in the middle is the one whose chat is open.** The current session's id
+ *   (`win.current`) is matched against each device's own chat, so opening a device's chat
+ *   elsewhere in the app leaves the right disc large.
+ *
+ * The third answer a tap can have is this client's own. The phone and the console open the
+ * device's chat and put a message on the wire; this is a DSH plugin, whose only way to reach
+ * another device is the `@name` frame the composer understands (`device-task.ts`). So a tap opens
+ * that device's *own chat* — one per device, remembered by the host so the same pick lands in the
+ * same window — and puts `@name` in its box. The person finishes the sentence where they always
+ * do, and everything said to that device stays in one place.
  *
  * Registered as one slot and self-contained: the decisions are in `device-row.ts` (checked by
- * `tests/device-row.test.mjs` without a renderer), the drawing is here, and nothing else changes.
+ * `tests/device-row.test.mjs` with no renderer), the drawing is here.
  */
-import { createElement as h, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Avatar } from './Avatar.tsx'
-import { prefillComposer } from './composer.ts'
-import { faceLabel, focusedFace, muses, newsIds, pickable, tapIntent, type RowFace } from './device-row.ts'
-import { IconDevices } from './icons.tsx'
-import { peekLive, useLive } from './live.ts'
+import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { faceLabel, centringScroll, focusedFace, muses, newsIds, pickable, tapIntent, type RowFace } from './device-row.ts'
+import { IconLaptop, IconPhone, IconSpinner } from './icons.tsx'
+import { useLive } from './live.ts'
+import { useWin } from './win.ts'
 import type { Translate } from './api.ts'
 
-/** How large each disc is. The large one is the face of the device this app runs on. */
-const LARGE = 26
-const SMALL = 20
-/** The slot is wider than the disc, so the gap between faces reads the same either side. */
-const WIDE = LARGE + 8
+/**
+ * How large a disc is at rest and how far it shrinks when it is not the middle one. The slot is
+ * the large size whatever the disc does, so nothing beside it shifts as one grows.
+ */
+const DISC = 40
+const SHRUNK = 0.62
+const SLOT = DISC + 10
+
+export interface DeviceRowProps {
+  t: Translate
+  /** Open a device's chat (making it if new), with `@name` already in the box. */
+  openChat?: ((deviceId: string, name: string) => void) | undefined
+  /** Show a question from another device — the newest one that device is waiting on. */
+  showAsk?: ((askId: string) => void) | undefined
+}
 
 /**
- * The row. Null when the account has only this computer: a row of one face says nothing about who
+ * The row. Null when the account has only this computer: a row of one disc says nothing about who
  * else there is, and the header already says whose chat is open.
  */
-export function DeviceRow({ t, showAsk }: { t: Translate; showAsk?: ((askId: string) => void) | undefined }): ReactNode {
+export function DeviceRow({ t, openChat, showAsk }: DeviceRowProps): ReactNode {
   const live = useLive()
+  const win = useWin()
   const box = useRef<HTMLDivElement | null>(null)
-  const faces = useMemo(() => muses(live.hub.devices, live.hub.deviceId), [live.hub.devices, live.hub.deviceId])
+  const faces = useMemo(
+    () => muses(live.hub.devices, live.hub.deviceId, { chatFor: (id) => live.hub.deviceChats?.[id] ?? null }),
+    [live.hub.devices, live.hub.deviceId, live.hub.deviceChats],
+  )
   const news = useMemo(() => newsIds(live.hub.asks, faces), [live.hub.asks, faces])
-  const big = focusedFace(faces)
-  const [roll, setRoll] = useState(0)
+  const big = focusedFace(faces, win.current)
+  // Bumped on every pick, so the roll runs even when the disc to centre is already the middle one
+  // — the common case, and the one that would otherwise leave the effect unfired and a tap
+  // unanswered by any movement.
+  const [pick, setPick] = useState(0)
+  // The first fit lands without animating: a chat opening on a device must not slide under the
+  // reader's eyes. Everything after that rolls.
+  const firstFit = useRef(true)
 
-  // The row rolls to keep the large face in the middle, as the strip does on the phone: the face
-  // that was picked is the one the person is looking for, and it may sit at either end.
   useEffect(() => {
     const el = box.current
     if (!el || !big) return
@@ -49,34 +81,44 @@ export function DeviceRow({ t, showAsk }: { t: Translate; showAsk?: ((askId: str
     if (!face) return
     const b = el.getBoundingClientRect()
     const f = face.getBoundingClientRect()
-    const max = Math.max(0, el.scrollWidth - el.clientWidth)
-    const want = f.left - b.left + el.scrollLeft - (el.clientWidth - f.width) / 2
-    el.scrollTo({ left: Math.min(Math.max(want, 0), max) })
-  }, [big, roll, faces.length])
+    const left = centringScroll({
+      boxLeft: b.left,
+      boxWidth: el.clientWidth,
+      faceLeft: f.left,
+      faceWidth: face.offsetWidth,
+      scrollLeft: el.scrollLeft,
+      contentWidth: el.scrollWidth,
+    })
+    const smooth = !firstFit.current
+    firstFit.current = false
+    el.scrollTo({ left, behavior: smooth ? 'smooth' : 'auto' })
+  }, [big, pick, faces.length])
+
+  const pick_ = useCallback(
+    (face: RowFace) => {
+      if (!pickable(face)) return
+      setPick((n) => n + 1)
+      const intent = tapIntent(face, live.hub.asks)
+      // A dotted face leads to the question the dot is about, or the dot points at nothing.
+      if (intent.kind === 'ask') {
+        showAsk?.(intent.deviceId)
+        return
+      }
+      // This computer's face goes home; the roll already answered "which disc is in front".
+      if (intent.kind === 'main') return
+      // Every other face opens that device's own chat, making one the first time.
+      openChat?.(intent.deviceId, intent.name)
+    },
+    [live.hub.asks, openChat, showAsk],
+  )
 
   if (faces.length < 2) return null
 
-  const pick = (face: RowFace) => {
-    if (!pickable(face)) return
-    const intent = tapIntent(face, live.hub.asks)
-    // A device waiting on a question leads to that question rather than to the box, or the dot
-    // would point at nothing: this client has no per-device chat to open.
-    if (intent.kind === 'ask') {
-      showAsk?.(intent.deviceId)
-      return
-    }
-    // Every other face addresses the composer to it, which is this client's only way to talk to a
-    // device and the same trip typing `@name` takes. This app's own face goes home, and a chat
-    // with no target is already its own — so picking it only rolls the row.
-    if (intent.kind === 'address') {
-      const current = face.device.name
-      prefillComposer(`@${current} `)
-    }
-    setRoll((n) => n + 1)
-  }
-
-  return h('div', { className: 'nm-device-row', 'data-testid': 'nm-device-row' },
+  return h('div', { className: 'nm-device-row', 'data-testid': 'nm-device-row', role: 'list', 'aria-label': t('drRow') },
     h('div', { className: 'nm-device-row-box', ref: box },
+      // Half a slot of slack each end, so the first and last disc can reach the middle too: without
+      // it a short account never overflows and "roll to the middle" has nothing to scroll.
+      h('span', { 'aria-hidden': true, className: 'nm-device-row-slack' }),
       faces.map((face) => {
         const isBig = big?.device.id === face.device.id
         const waiting = news.has(face.device.id)
@@ -84,37 +126,53 @@ export function DeviceRow({ t, showAsk }: { t: Translate; showAsk?: ((askId: str
         const hint = !pickable(face)
           ? t('drOffline', { device: label })
           : waiting ? t('drWaiting', { device: label }) : t('drPick', { device: label })
+        // The disc is filled and tinted only when it is the one in front, which is the same
+        // emphasis the console puts on the middle disc; the rest are quiet.
+        const cls = `nm-device-face${isBig ? ' nm-device-face-big' : ''}${face.device.online ? '' : ' nm-device-face-off'}`
         return h('button', {
           key: face.device.id,
           type: 'button',
           'data-device': face.device.id,
-          className: `nm-device-face${isBig ? ' nm-device-face-big' : ''}${face.device.online ? '' : ' nm-device-face-off'}${waiting ? ' nm-device-face-news' : ''}`,
-          style: { width: isBig ? WIDE : SMALL + 6 },
+          className: cls,
+          style: { width: SLOT },
           disabled: !pickable(face),
+          'aria-current': isBig ? 'true' : undefined,
           'aria-label': hint,
           title: hint,
-          onClick: () => pick(face),
+          onClick: () => pick_(face),
         },
-          h(Avatar, { size: isBig ? LARGE : SMALL, profile: live.profile, still: true, className: 'nm-device-face-disc' }),
-          waiting ? h('span', { className: 'nm-device-face-dot', 'data-testid': `nm-device-dot-${face.device.id}` }) : null,
+          h('span', { className: 'nm-device-face-slot' },
+            h('span', {
+              className: 'nm-device-face-disc',
+              style: { transform: isBig ? 'scale(1)' : `scale(${SHRUNK})` },
+            }, h(face.device.kind === 'phone' ? IconPhone : IconLaptop, { size: 20 })),
+            // A device waiting on a question here wears the dot, at the disc's foot so it rides the
+            // disc as it grows and stays clear of the name under it.
+            waiting ? h('span', { className: 'nm-device-face-dot', 'data-testid': `nm-device-dot-${face.device.id}` }) : null),
           h('span', { className: 'nm-device-face-name' }, label))
-      })),
-    // A row that has rolled past its ends holds more than the window shows, which is otherwise
-    // only discoverable by trying to scroll it.
-    faces.length > 5 ? h('span', { className: 'nm-device-row-more' }, h(IconDevices, { size: 13 })) : null)
+      }),
+      h('span', { 'aria-hidden': true, className: 'nm-device-row-slack' })))
 }
 
 /**
  * The row as the composer's dock entry.
  *
- * Nothing is drawn until the hub has answered with a device list: before that the account is
- * unknown, and an empty row would be a place on screen that says nothing. `peekLive` is the same
- * store `useLive` reads, so this is the list as it stands right now rather than a second source.
+ * Nothing is drawn until the hub has answered with a device list — before that the account is
+ * unknown, and an empty row would be a place on screen that says nothing.
+ *
+ * This subscribes rather than reading once. The hub's handshake finishes *after* the chat mounts,
+ * so a one-shot read at mount lands on `connected: false` and the gate below returns null for
+ * good: the row would be empty for the whole session, however long the hub had been up. Reading
+ * through the hook is what makes the row appear when the list arrives.
  */
-export function makeDeviceRow(t: Translate, showAsk?: ((askId: string) => void) | undefined) {
+export function makeDeviceRow(
+  t: Translate,
+  openChat?: ((deviceId: string, name: string) => void) | undefined,
+  showAsk?: ((askId: string) => void) | undefined,
+) {
   return function DeviceRowSlot(): ReactNode {
-    const live = peekLive()
+    const live = useLive()
     if (!live.hub.connected || live.hub.devices.length === 0) return null
-    return h(DeviceRow, { t, showAsk })
+    return h(DeviceRow, { t, openChat, showAsk })
   }
 }

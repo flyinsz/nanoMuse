@@ -1438,25 +1438,36 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
 .nm-md-bar > span { display: block; height: 100%; background: var(--nm-accent, #0064d4); border-radius: 999px; transition: width 300ms; }
 .nm-md-failed { color: #c9302c; }
 
-/* The account's Muses as one row above the composer. It is drawn to read as the strip the phone
-   has, not as part of the message being written: no card, no border, and the discs sit on the
-   composer's own background. The row scrolls sideways without a visible bar, so the faces that
-   are off its ends are found by the roll a pick causes rather than by grabbing it. */
-.nm-device-row { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; }
-.nm-device-row-box { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; scroll-behavior: smooth; }
+/* The account's Muses as one row above the composer, drawn as the strip the phone and the
+   console draw: no card and no border, the discs sitting on the composer's own background, and
+   the row scrolling sideways with no visible bar (a pick is what turns it, not a drag).
+   A disc carries a laptop or a phone, not the agent's face: the profile is one per account, so
+   every device wears the identical face and a face would not say which disc is which. */
+.nm-device-row { display: flex; align-items: center; margin: 0 0 8px; }
+.nm-device-row-box { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .nm-device-row-box::-webkit-scrollbar { display: none; }
-.nm-device-row-more { display: inline-flex; flex: none; color: var(--dsw-alias-label-tertiary); }
-.nm-device-face { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; flex: none; padding: 2px 0; border: 0; background: none; cursor: pointer; transition: width 200ms ease; }
-.nm-device-face-disc { border-radius: 50%; opacity: 0.55; transition: opacity 160ms ease, transform 200ms ease; }
-.nm-device-face-big .nm-device-face-disc { opacity: 1; }
-.nm-device-face:hover .nm-device-face-disc { opacity: 1; }
+/* Half a slot of slack each end, so the first and last disc can reach the middle too. Without it
+   a short account never overflows and the roll has nothing to scroll. */
+.nm-device-row-slack { flex: none; width: 50%; }
+.nm-device-face { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; flex: none; padding: 3px 0 1px; border: 0; background: none; cursor: pointer; }
+/* The slot is the large size whatever the disc does, so nothing beside it shifts as one grows
+   and the roll never changes the strip's own width under the person's eyes. */
+.nm-device-face-slot { position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; }
+/* The disc: quiet and unfilled when it is not the one in front, filled and tinted when it is —
+   the same emphasis the console puts on the middle disc. The size is a transform so the growth
+   can be transitioned; a width change would relayout the whole row on every frame of the roll. */
+.nm-device-face-disc { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--nm-divider, var(--dsw-alias-border-l2)); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms ease, border-color 200ms ease, color 200ms ease; }
+.nm-device-face-big .nm-device-face-disc { border-color: var(--nm-accent, #0064d4); background: color-mix(in srgb, var(--nm-accent, #0064d4) 16%, transparent); color: var(--nm-accent, #0064d4); }
+.nm-device-face:not(:disabled):hover .nm-device-face-disc { border-color: var(--nm-accent, #0064d4); color: var(--nm-accent, #0064d4); }
 .nm-device-face-off { cursor: default; }
-.nm-device-face-off .nm-device-face-disc { opacity: 0.3; }
-.nm-device-face-name { font-size: 10px; line-height: 1.1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); }
-.nm-device-face-big .nm-device-face-name { color: var(--dsw-alias-label-secondary); }
+.nm-device-face-off .nm-device-face-disc { opacity: 0.4; }
+.nm-device-face-name { max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; line-height: 1.15; font-size: 10px; color: var(--dsw-alias-label-tertiary); transition: color 200ms ease; }
+.nm-device-face-big .nm-device-face-name { color: var(--dsw-alias-label-primary); font-weight: 500; }
+.nm-device-face-off .nm-device-face-name { opacity: 0.5; }
 /* Green at the disc's foot, the same place and colour the phones put it: something arrived from
-   this device and is waiting. */
-.nm-device-face-dot { position: absolute; left: 50%; bottom: 9px; transform: translateX(-50%); width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); }
+   this device and is waiting. At the disc rather than the slot, so it rides the disc as it grows
+   and stays clear of the name under it. */
+.nm-device-face-dot { position: absolute; right: 2px; bottom: 0; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); }
 `
 
 /** Put the stylesheet in the head once and mark the document as ours. */

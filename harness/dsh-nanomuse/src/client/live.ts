@@ -72,6 +72,12 @@ export interface LiveHub {
   asks: LiveAsk[]
   lastError?: string
   devices: LiveDevice[]
+  /**
+   * The chat this computer keeps with each device (device id → session id), for the row above the
+   * composer: a tap returns to the window a device already has instead of making a second. The
+   * host keeps it (it has to outlive a restart); this is the copy to draw from.
+   */
+  deviceChats?: Record<string, string>
 }
 
 export interface LiveTrusted {

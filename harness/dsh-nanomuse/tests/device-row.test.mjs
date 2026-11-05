@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { faceLabel, focusedFace, isThisDevice, muses, newestAskFrom, newsIds, pickable, tapIntent } from '../src/client/device-row.ts'
+import { centringScroll, faceLabel, focusedFace, isThisDevice, muses, newestAskFrom, newsIds, pickable, tapIntent } from '../src/client/device-row.ts'
 
 function device(over = {}) {
   return { id: 'd1', name: 'Mac mini', kind: 'computer', os: 'macOS', version: '1', online: true, last_seen: 0, controllable: true, actions: [], ...over }
@@ -94,16 +94,30 @@ test('picking this computer goes home', () => {
   assert.deepEqual(tapIntent(me, []), { kind: 'main' })
 })
 
-test('picking another device addresses the composer to it', () => {
-  const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
+test('picking another device opens that device\u2019s own chat', () => {
+  const row = muses([device({ id: 'me' }), device({ id: 'p1', name: 'Pixel' })], 'me')
   const other = row.find((f) => !f.isThis)
-  assert.deepEqual(tapIntent(other, []), { kind: 'address', deviceId: 'p1' })
+  assert.deepEqual(tapIntent(other, []), { kind: 'chat', deviceId: 'p1', name: 'Pixel', chat: null })
 })
 
-test('a device waiting on a question leads to that question, not to the composer', () => {
+test('a device that already has a chat leads back to the one it has', () => {
+  const row = muses([device({ id: 'me' }), device({ id: 'p1', name: 'Pixel' })], 'me', {
+    chatFor: (id) => (id === 'p1' ? 'session-7' : null),
+  })
+  const other = row.find((f) => !f.isThis)
+  assert.deepEqual(tapIntent(other, []), { kind: 'chat', deviceId: 'p1', name: 'Pixel', chat: 'session-7' })
+})
+
+test('a device waiting on a question leads to that question, not to its chat', () => {
   const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
   const other = row.find((f) => !f.isThis)
   assert.deepEqual(tapIntent(other, [ask()]), { kind: 'ask', deviceId: 'p1' })
+})
+
+test('a question does not divert this computer\u2019s own face from going home', () => {
+  const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
+  const me = row.find((f) => f.isThis)
+  assert.deepEqual(tapIntent(me, [ask({ fromId: 'me' })]), { kind: 'main' })
 })
 
 test('the newest question from a device is the one a dotted tap opens', () => {
@@ -130,4 +144,46 @@ test('a sleeping device is drawn but cannot be picked', () => {
   const row = muses([device({ id: 'off', online: false })], '')
   assert.equal(pickable(row[0]), false)
   assert.equal(pickable(muses([device({ id: 'on', online: true })], '')[0]), true)
+})
+
+// ---- the disc in the middle ------------------------------------------------------------
+
+test('the disc of the chat on screen is the large one', () => {
+  const devices = [device({ id: 'me' }), device({ id: 'p1' }), device({ id: 'p2' })]
+  const row = muses(devices, 'me', { chatFor: (id) => (id === 'p2' ? 'session-2' : null) })
+  assert.equal(focusedFace(row, 'session-2')?.device.id, 'p2')
+})
+
+test('a chat that belongs to no device leaves this computer large', () => {
+  const devices = [device({ id: 'me' }), device({ id: 'p1' })]
+  const row = muses(devices, 'me', { chatFor: () => null })
+  assert.equal(focusedFace(row, 'some-side-chat')?.device.id, 'me')
+})
+
+test('with nothing open this computer is the large one', () => {
+  const row = muses([device({ id: 'a' }), device({ id: 'me' })], 'me')
+  assert.equal(focusedFace(row, null)?.device.id, 'me')
+})
+
+// ---- the roll -------------------------------------------------------------------------
+
+test('centring puts a disc in the middle of the box', () => {
+  // a 200-wide box holding 1000 of content, scrolled nowhere, a 40-wide disc at content 500
+  const left = centringScroll({ boxLeft: 0, boxWidth: 200, faceLeft: 500, faceWidth: 40, scrollLeft: 0, contentWidth: 1000 })
+  assert.equal(left, 500 - (200 - 40) / 2)
+})
+
+test('the roll never asks for less than the start or more than the end', () => {
+  const atStart = centringScroll({ boxLeft: 0, boxWidth: 200, faceLeft: 0, faceWidth: 40, scrollLeft: 0, contentWidth: 1000 })
+  assert.equal(atStart, 0)
+  const atEnd = centringScroll({ boxLeft: 0, boxWidth: 200, faceLeft: 980, faceWidth: 40, scrollLeft: 0, contentWidth: 1000 })
+  assert.equal(atEnd, 800)
+})
+
+test('the roll accounts for where the box is already scrolled to', () => {
+  // The same disc as the first test (its own place in the content is 500), with the box scrolled
+  // 300: on screen it now sits at faceLeft -100. The scroll is taken back out to find that place
+  // again, so the answer must come out the same: 420, not the 720 a naive reading would give.
+  const left = centringScroll({ boxLeft: -300, boxWidth: 200, faceLeft: -100, faceWidth: 40, scrollLeft: 300, contentWidth: 1000 })
+  assert.equal(left, 420)
 })

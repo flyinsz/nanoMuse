@@ -422,6 +422,14 @@ interface State {
   trusted?: Record<string, { name: string; at: number }>
   /** The session each other device's conversation lives in (`<device id>\n<conversation>` → session id). */
   taskSessions?: Record<string, string>
+  /**
+   * The chat this computer keeps with each device of the account (device id → session id), for the
+   * device row above the composer. The other direction from `taskSessions`: that one is where a
+   * device's *incoming* work lands here, this one is the window the person opens to talk *to* a
+   * device. Kept so picking the same device twice returns to one window rather than making a
+   * second, and kept here rather than in the client because it has to survive a restart.
+   */
+  deviceChats?: Record<string, string>
   /** Conversations synced between the account's devices (C7, C8): the cursor, the ids, what the relay knows. */
   sync?: SyncState
   /** The hands model the person chose; absent means the account's default. */
@@ -1602,6 +1610,62 @@ export default class NanomuseCloud extends Service {
 
   holdDone(id: string): boolean {
     return this.holdDesk.done(id)
+  }
+
+  // ---- the row above the composer: a chat with each device of the account ------------
+
+  /**
+   * The chat this computer keeps with a device, making it the first time.
+   *
+   * A device's chat is a window the person returns to, so picking the same device twice must
+   * land in the same one rather than making a second: the mapping is kept in state
+   * (`deviceChats`) and written through, so it outlives a restart. The session is created in the
+   * home workspace, as the first conversation is, and named after the device so the chats column
+   * says which one it is.
+   *
+   * A mapping whose session is gone (deleted from the chats column, or an older state) is
+   * replaced rather than returned: a dead id would open nothing.
+   */
+  async openDeviceChat(deviceId: string, name: string): Promise<string> {
+    const id = deviceId.trim()
+    if (!id) throw new Error('a device id is required')
+    const known = this.state.deviceChats?.[id]
+    if (known) {
+      const alive = await this.sessionAlive(known)
+      if (alive) return known
+    }
+    const title = (name.trim() || id).slice(0, 80)
+    const created = await this.sessionController.create(await homeWorkspace(this.ctx))
+    const sessionId = String(created.sessionId)
+    await this.sessionController.rename({ sessionId: created.sessionId, title }).catch(() => undefined)
+    this.state.deviceChats = { ...this.state.deviceChats, [id]: sessionId }
+    await this.writeState().catch(() => undefined)
+    this.broadcast()
+    return sessionId
+  }
+
+  /** Whether a remembered session is still there (live, or on disk and resumable). */
+  private async sessionAlive(sessionId: string): Promise<boolean> {
+    try {
+      const resolved = (await this.sessionController.resolveAgent(sessionId as SessionId)) as
+        | Record<string, unknown>
+        | null
+        | undefined
+      return Boolean(resolved && typeof resolved === 'object' && 'agent' in resolved)
+    } catch {
+      return false
+    }
+  }
+
+  /** The session controller, or an error when the harness has none yet. */
+  private get sessionController(): { create(input: unknown): Promise<{ sessionId: string }>; rename(input: { sessionId: unknown; title: string }): Promise<unknown>; resolveAgent(id: unknown): Promise<unknown> } {
+    const sc = this.ctx.get('sessionController') as unknown as {
+      create(input: unknown): Promise<{ sessionId: string }>
+      rename(input: { sessionId: unknown; title: string }): Promise<unknown>
+      resolveAgent(id: unknown): Promise<unknown>
+    } | undefined
+    if (!sc) throw new Error('chats are not available yet')
+    return sc
   }
 
   // ---- the hands model (C4) ----------------------------------------------------------
@@ -3824,6 +3888,10 @@ export default class NanomuseCloud extends Service {
       asks: this.asks.list,
       ...(this.hub.lastError ? { lastError: this.hub.lastError } : {}),
       devices: this.hub.devices,
+      // The chats this computer keeps with each device, for the row above the composer.
+      ...(this.state.deviceChats && Object.keys(this.state.deviceChats).length
+        ? { deviceChats: this.state.deviceChats }
+        : {}),
     }
   }
 
@@ -3855,6 +3923,7 @@ export default class NanomuseCloud extends Service {
         ...(raw.remoteControl === true ? { remoteControl: true } : {}),
         ...(raw.trusted && typeof raw.trusted === 'object' ? { trusted: trustedOf(raw.trusted) } : {}),
         ...(raw.taskSessions && typeof raw.taskSessions === 'object' ? { taskSessions: raw.taskSessions } : {}),
+        ...(raw.deviceChats && typeof raw.deviceChats === 'object' ? { deviceChats: raw.deviceChats } : {}),
         ...(raw.sync && typeof raw.sync === 'object' ? { sync: raw.sync } : {}),
         ...(raw.media && typeof raw.media === 'object' ? { media: raw.media } : {}),
         ...(typeof raw.handsProvider === 'string' && raw.handsProvider ? { handsProvider: raw.handsProvider } : {}),

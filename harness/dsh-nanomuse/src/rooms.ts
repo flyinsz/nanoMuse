@@ -2035,6 +2035,16 @@ export default class NanomuseRooms extends Service {
           }))
         case '/firstrun/start':
           return send(res, 200, await this.startFirstConversation())
+        case '/devices/open-chat': {
+          // A tap on a device in the row above the composer: return that device's own chat,
+          // making it the first time. The service side owns the mapping and persists it, so
+          // picking the same device twice lands in one window rather than making a second.
+          const cloud = this.ctx.get('nanomuseCloud') as { openDeviceChat?(deviceId: string, name: string): Promise<string> } | undefined
+          if (!cloud?.openDeviceChat) return send(res, 503, { error: { code: 'no_cloud', message: 'the account service is not up yet' } })
+          const deviceId = String(body.deviceId ?? '').trim()
+          if (!deviceId) return send(res, 400, { error: { code: 'bad_request', message: 'deviceId is required' } })
+          return send(res, 200, { sessionId: await cloud.openDeviceChat(deviceId, String(body.name ?? '')) })
+        }
         case '/firstrun/finish':
           await this.finishFirstRun()
           return send(res, 204)
