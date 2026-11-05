@@ -29,6 +29,7 @@ import { WaitLine } from './WaitLine.tsx'
 import { StopAsk, makeThumbs } from './Feedback.tsx'
 import { interceptComposer, makeAvatarChat } from './AvatarChat.tsx'
 import { makeDeviceTask } from './device-task.ts'
+import { makeDeviceRow } from './DeviceRowSlot.tsx'
 import { makeCapsule } from './Capsule.tsx'
 import { prefillComposer } from './composer.ts'
 import { makeMicButton, makeQuoteAction } from './ComposerExtras.tsx'
@@ -405,6 +406,13 @@ export function apply(ctx: ClientContext): void {
   slots.inject('shell.overlay', () =>
     slots.register({ name: 'shell.overlay', id: 'nanomuse.device-task', locale: 'nanomuse' }, DeviceTaskCard))
   ctx.effect(() => interceptComposer(), 'nanomuse: avatar words')
+  // The account's Muses as one row above the composer: a tap puts `@name` in the box, which is
+  // the same trip typing it takes, and a device waiting on a question here wears a dot and leads
+  // to it. The row is the third client to draw this (`DeviceStrip` on the phone, `device-strip.ts`
+  // in the console); the decisions live in `device-row.ts`.
+  const DeviceRow = makeDeviceRow(t, () => { shell.openSection(DEVICES_PANEL) })
+  slots.inject('conversation.input.dock', () =>
+    slots.register({ name: 'conversation.input.dock', id: 'nanomuse.devices', order: -7, locale: 'nanomuse' }, DeviceRow))
   // The microphone at the right of the composer; "reply with a quote" beside Copy.
   const MicButton = makeMicButton(t, () => { shell.openSection(DICTATION_SECTION) })
   slots.inject('conversation.input.right', () =>

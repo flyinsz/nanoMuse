@@ -1437,6 +1437,26 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
 .nm-md-bar { height: 4px; margin: 0 14px 12px; border-radius: 999px; background: var(--dsw-alias-bg-layer-3); overflow: hidden; }
 .nm-md-bar > span { display: block; height: 100%; background: var(--nm-accent, #0064d4); border-radius: 999px; transition: width 300ms; }
 .nm-md-failed { color: #c9302c; }
+
+/* The account's Muses as one row above the composer. It is drawn to read as the strip the phone
+   has, not as part of the message being written: no card, no border, and the discs sit on the
+   composer's own background. The row scrolls sideways without a visible bar, so the faces that
+   are off its ends are found by the roll a pick causes rather than by grabbing it. */
+.nm-device-row { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; }
+.nm-device-row-box { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; scroll-behavior: smooth; }
+.nm-device-row-box::-webkit-scrollbar { display: none; }
+.nm-device-row-more { display: inline-flex; flex: none; color: var(--dsw-alias-label-tertiary); }
+.nm-device-face { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; flex: none; padding: 2px 0; border: 0; background: none; cursor: pointer; transition: width 200ms ease; }
+.nm-device-face-disc { border-radius: 50%; opacity: 0.55; transition: opacity 160ms ease, transform 200ms ease; }
+.nm-device-face-big .nm-device-face-disc { opacity: 1; }
+.nm-device-face:hover .nm-device-face-disc { opacity: 1; }
+.nm-device-face-off { cursor: default; }
+.nm-device-face-off .nm-device-face-disc { opacity: 0.3; }
+.nm-device-face-name { font-size: 10px; line-height: 1.1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); }
+.nm-device-face-big .nm-device-face-name { color: var(--dsw-alias-label-secondary); }
+/* Green at the disc's foot, the same place and colour the phones put it: something arrived from
+   this device and is waiting. */
+.nm-device-face-dot { position: absolute; left: 50%; bottom: 9px; transform: translateX(-50%); width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); }
 `
 
 /** Put the stylesheet in the head once and mark the document as ours. */

@@ -84,13 +84,30 @@ OpenMinis 1.15 ：385/392
 
 ## 二、三端现状（已逐端核实）
 
+> ⚠️ **本节已于 2026-11-05 重写**。原表停在合并上游 92 个提交**之前**，其中「Android 中转」
+> 「Web 中转」两条已被上游自己的实现取代（上游在 `sync/` 里做了 `@设备` 直发），照原表做决策会走错方向。
+
 | 能力 | Android | iOS | Web | Mac (dsh) |
 |---|---|---|---|---|
-| `@设备` 发送 | ⚠️ **中转**：`DeviceMention.apply` 注入提示 → 本地 Muse 跑一轮 → 调 `nanomuse-pc task` | ✅ **直发** hub `task` | ⚠️ **中转**：runtime `parse_mention` → agent 调 `delegate` | ❌ 无 |
-| `@` 补全 UI | ❌ 只列文件 | ✅ 设备优先（`AIChatViewModel+MentionMenu.swift`） | ✅ 有建议 + 目标提示（`web/src/mention.ts`） | ❌ 仅 DevicesPanel 一行 `@name` 文字 |
-| 设备会话（`thread.device`） | ❌ | ❌ | ✅ `Ask` → `POST /api/hub/ask` | ❌ |
-| 设备会话进会话列表 | ❌ | ❌ | ✅ 图标 + 路由（`ChatScreen.tsx:1155`） | ❌ |
+| `@设备` 发送 | ✅ **直发** hub `task`（上游 `sync/RemoteDeviceRoute` + `RemoteChatBridge`） | ✅ 直发 hub `task`（上游 `NanoMuseDeviceMention`） | ✅ 直发（runtime `parse_mention` → `delegate`，或 `device-send.ts` 的 `POST /api/hub/ask`） | ✅ `device-mention.ts` + `device-task.ts` |
+| `@` 补全 UI | ✅ 设备优先（上游 `sync/DeviceMentionMenu`，在文件之前） | ✅ 设备优先（`AIChatViewModel+MentionMenu.swift`） | ✅ 有建议 + 目标提示（`web/src/mention.ts`） | ❌ 仅 DevicesPanel 一行 `@name` 文字 |
+| **设备条（一行头像）** | ✅ **fork 独有**（`terminal/DeviceStrip` + `ui/chat/DeviceFacesRow`） | ❌ | ✅ **fork 独有**（`device-strip.ts` + `components/DeviceFaces.tsx`） | ✅ **fork 独有**（`device-row.ts` + `DeviceRowSlot.tsx`，2026-11-05 补） |
+| 未读绿点 | ✅ fork（`DeviceNews` + `DeviceInbox`） | ❌ | ✅ fork（`hasNews` + `newestUnreadIncoming`） | ◐ fork：只覆盖「有设备在等本机回答」（`newsIds`，来自 `hub.asks`） |
+| 设备会话（`thread.device`） | ✅ fork（`terminal/DeviceChat`） | ❌ | ✅ `Ask` → `POST /api/hub/ask` | ❌（本机无设备专属会话，见下） |
+| 设备会话进会话列表 | ✅ fork（`DeviceChat` 建会话 + `From <设备>` 命名） | ❌ | ✅ 图标 + 路由（`ChatScreen.tsx:1155`） | ❌ |
 | 派单工具 | `nanomuse-pc`（sandbox shell） | 无（所以直发） | `delegate` | `delegate` + `device_*` |
+
+### 2.0 合并后新增的两处欠账（2026-11-05）
+
+**① 上游路径与我方路径落点不一致（未修，用户决定暂不动）。**
+`ChatViewModel.sendMessage` 里两条路径并存：上游 `nmRemoteBridge.send`（`@设备`）把消息**留在当前会话**，
+我方 `nmSendToDevice`（点脸 aim-only）把消息**跳进设备专属会话**。同一件事两种落点，
+削弱了 `DeviceChat`「一个设备的全部对话只在一处」的意义。
+
+**② Mac 端没有设备专属会话。**
+`harness/dsh-nanomuse` 是 DSH 插件，聊天用宿主 DSH 的，`device-task.ts` 在**当前会话**里跑完一次设备任务。
+所以 Mac 端设备条的 dot 只表达「有设备在等本机回答」（`hub.asks`），不是「设备会话有未读」。
+`hub.asks` 在补设备条**之前从未被任何 UI 使用**——它一直是被声明但没人读的数据。
 
 ### 2.1 三处关键发现
 

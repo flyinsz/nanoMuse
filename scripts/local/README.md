@@ -55,8 +55,20 @@ export NM_PROXY=http://127.0.0.1:7890     # 脚本默认就用这个
 
 ## 日常：跟上上游
 
-上游每天 300 次以上的提交（近 7 天 361 次）。但**我们只改 `android/`**，其余目录零改动，
-所以跟上上游基本是免费的：
+上游每天 300 次以上的提交（2026-11-05 复核：近 14 天 755 次，约 54/天）。
+
+⚠️ **早期版本这里写着「我们只改 `android/`，其余目录零改动」—— 那句话已经不成立。**
+实际改动面（2026-11-05 核实）：
+
+| 目录 | 改动 | 说明 |
+|---|---|---|
+| `android/src/android` | 39 文件 | 设备条主体（`io.github.nanomuse.terminal` + `ui/chat/DeviceFacesRow`） |
+| `web/src` | 8 文件 | Web 端设备条（`device-strip.ts`、`DeviceFaces.tsx`、`send.ts`） |
+| `harness/dsh-nanomuse` | 12 文件 | 桌面端设备条（`device-row.ts`、`DeviceRowSlot.tsx`）与设备任务 |
+| `nanomuse/` | 32 文件 | **多数是 `server/static/` 的构建产物**，非手写 |
+
+所以「跟上上游」不再免费：上游改到这三个目录时会有冲突。**新代码仍然优先放新文件**，
+这是把冲突面压住的主要手段。
 
 ```bash
 bash scripts/local/nm-fork.sh sync
