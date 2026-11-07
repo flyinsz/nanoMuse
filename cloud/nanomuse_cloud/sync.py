@@ -128,6 +128,10 @@ def _conversation_row(r: sqlite3.Row, names: dict[str, str]) -> dict:
         "title": r["title"],
         "device": r["device"],
         "device_name": names.get(r["device"], ""),
+        # C13: the device that holds this conversation's full context (a device id, "" on
+        # a row pushed before the column existed); the others hand a turn to it.
+        "owner_device": r["owner_device"],
+        "owner_device_name": names.get(r["owner_device"], ""),
         "created_at": int(r["created_at"]),
         "updated_at": int(r["updated_at"]),
         "deleted": bool(r["deleted"]),
@@ -153,6 +157,55 @@ def _message_row(r: sqlite3.Row, names: dict[str, str]) -> dict:
         "created_at": int(r["created_at"]),
         "deleted": bool(r["deleted"]),
     }
+
+
+# -- streaming (C13) ---------------------------------------------------------------------------
+
+#: the longest one `stream` frame's pieces carry. A device batches its output and sends a
+#: frame every 200–250 ms, so the common frame is small; this is only a ceiling for text
+#: that arrives in one burst (a tool result, say). The hub's frame_limit is per frame.
+STREAM_PIECE_CAP = 4096
+
+
+def clean_tool(value: object) -> dict | None:
+    """A tool's progress in a `stream` frame: `{name, stage}` with stage `call` or `result`.
+    Anything else → None (the frame carries no tool bit, which is valid)."""
+    if not isinstance(value, dict):
+        return None
+    stage = str(value.get("stage") or "")
+    if stage not in ("call", "result"):
+        return None
+    name = str(value.get("name") or "")[:STREAM_PIECE_CAP]
+    return {"name": name, "stage": stage}
+
+
+def stream_frame(body: dict, device: str) -> dict:
+    """C13 `POST /v1/sync/stream` → the body the hub broadcasts (without `type`). At least
+    one of `delta` / `reasoning` / `tool` must be non-empty, or the frame must close a
+    round with `done`; otherwise it carries nothing and is refused as a bad request."""
+    cid = valid_id(body.get("cid"))
+    if cid is None:
+        raise CloudError(400, "bad_cid", "That is not a conversation id")
+    round_id = str(body.get("round") or "")[:80]
+    try:
+        seq = int(body.get("seq") or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    delta = str(body.get("delta") or "")[:STREAM_PIECE_CAP]
+    reasoning = str(body.get("reasoning") or "")[:STREAM_PIECE_CAP]
+    tool = clean_tool(body.get("tool"))
+    done = bool(body.get("done"))
+    if not delta and not reasoning and tool is None and not done:
+        raise CloudError(400, "bad_request", "A stream frame carries delta, reasoning, tool or done")
+    frame: dict = {"cid": cid, "from": device, "round": round_id, "seq": max(0, seq)}
+    if delta:
+        frame["delta"] = delta
+    if reasoning:
+        frame["reasoning"] = reasoning
+    if tool is not None:
+        frame["tool"] = tool
+    frame["done"] = done
+    return frame
 
 
 # -- presence -----------------------------------------------------------------------------------
@@ -398,6 +451,23 @@ class SyncStore:
             name = self._device_names(c, account_id).get(device, "")
         return self.presence.set(account_id, cid_ok, device, name, bool(working), state=state, detail=detail)
 
+    def stream(self, account_id: str, device: str, body: dict) -> dict:
+        """C13 `POST /v1/sync/stream`: a batch of a turn running here, for the account's
+        other devices. Validates that sync is on and that the conversation exists (as
+        `set_working` does), then returns the frame body the hub broadcasts. Nothing is
+        stored: a frame lost in flight is fine, the final text arrives by `sync`."""
+        if not isinstance(body, dict):
+            raise CloudError(400, "bad_request", "A stream frame is an object")
+        device = str(device or "")[:80]
+        frame = stream_frame(body, device)
+        with self.db.tx() as c:
+            if not self._enabled(c, account_id):
+                raise CloudError(409, "sync_off", "Conversation sync is off for this account")
+            row = c.execute("SELECT deleted FROM sync_conversations WHERE account_id=? AND cid=?", (account_id, frame["cid"])).fetchone()
+            if row is None or row["deleted"]:
+                raise CloudError(404, "no_conversation", "No synced conversation with that id")
+        return frame
+
     @staticmethod
     def _live_conversations(c: sqlite3.Connection, account_id: str) -> int:
         return int(
@@ -450,6 +520,11 @@ class SyncStore:
                 # renamed, since its `updated_at` fell back to `created_at` and lost
                 updated_at = max(created_at, _ts(conv.get("updated_at"), created_at, ceiling=t))
                 deleted = bool(conv.get("deleted"))
+                # C13: the device that holds the conversation's context. Only what the
+                # client sent is read here; an old app sends none, and a new conversation
+                # then falls back to the pushing device (its creator). The empty value is
+                # never allowed to overwrite a real owner below.
+                owner_device = str(conv.get("owner_device") or "")[:80]
                 row = c.execute("SELECT * FROM sync_conversations WHERE account_id=? AND cid=?", (account_id, cid)).fetchone()
                 if row is None:
                     if kind == "side" and not deleted and self._live_conversations(c, account_id) >= LIMITS["conversations"]:
@@ -469,14 +544,15 @@ class SyncStore:
                             continue
                     seq = self._next_seq(c, account_id)
                     c.execute(
-                        "INSERT INTO sync_conversations(account_id, cid, kind, title, device, created_at, updated_at, deleted, deleted_at, seq) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO sync_conversations(account_id, cid, kind, title, device, owner_device, created_at, updated_at, deleted, deleted_at, seq) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             account_id,
                             cid,
                             kind,
                             "" if deleted else title,
                             device,
+                            owner_device or device,
                             created_at,
                             updated_at,
                             1 if deleted else 0,
@@ -491,13 +567,20 @@ class SyncStore:
                 if deleted:
                     self._tombstone(c, account_id, cid, t)
                     accepted += 1
-                elif updated_at >= int(row["updated_at"]) and (title != row["title"] or updated_at != int(row["updated_at"])):
-                    seq = self._next_seq(c, account_id)
-                    c.execute(
-                        "UPDATE sync_conversations SET title=?, updated_at=?, seq=? WHERE account_id=? AND cid=?",
-                        (title, updated_at, seq, account_id, cid),
-                    )
-                    accepted += 1
+                else:
+                    # C13: a push may hand the conversation to another device (`@`). An
+                    # empty owner is a read from a client that never knew the field, so it
+                    # never clears a real one.
+                    new_owner = owner_device or str(row["owner_device"])
+                    if updated_at >= int(row["updated_at"]) and (
+                        title != row["title"] or updated_at != int(row["updated_at"]) or new_owner != row["owner_device"]
+                    ):
+                        seq = self._next_seq(c, account_id)
+                        c.execute(
+                            "UPDATE sync_conversations SET title=?, owner_device=?, updated_at=?, seq=? WHERE account_id=? AND cid=?",
+                            (title, new_owner, updated_at, seq, account_id, cid),
+                        )
+                        accepted += 1
             touched_cids: set[str] = set()
             for msg in messages:
                 if not isinstance(msg, dict):

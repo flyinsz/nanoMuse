@@ -95,7 +95,9 @@ APPROVE_ANY = "approve.any"
 PUSHES_PER_MINUTE = 30
 PUSH_BODY_BYTES = 16 * 1024
 # what this relay understands beyond the frames every version has; `welcome.server.features`
-FEATURES = ["event_push"]
+# C13 adds `stream_sync`: the relay passes a server-built `stream` frame from the device
+# running a turn to the account's other devices (a client without it ignores the frame).
+FEATURES = ["event_push", "stream_sync"]
 
 
 class Bucket:
@@ -342,6 +344,17 @@ class Hub:
             return
         frame = {"type": "working", **body}
         await asyncio.gather(*(c.send(frame) for c in conns))
+
+    async def notify_stream(self, account_id: str, frame: dict) -> None:
+        """C13: a device running a turn sent a batch of its output (`POST /v1/sync/stream`);
+        every *other* connected device of the account hears the `stream` frame and draws it
+        on the conversation. `frame` is the body, already shaped by api.py (cid, from,
+        round, seq, delta, reasoning, tool, done); the sender's own socket is skipped, as
+        `notify_working` does. Fire and forget: nothing is stored, a lost frame is fine."""
+        conns = [c for c in self.online.get(account_id, {}).values() if c.device_id != str(frame.get("from") or "")]
+        if not conns:
+            return
+        await asyncio.gather(*(c.send({"type": "stream", **frame}) for c in conns))
 
     def forget(self, account_id: str, device_id: str) -> None:
         if device_id in self.online.get(account_id, {}):

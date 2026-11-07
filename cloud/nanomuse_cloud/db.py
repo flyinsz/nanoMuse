@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS sync_conversations (
     kind          TEXT NOT NULL,              -- main | side (one main per account)
     title         TEXT NOT NULL DEFAULT '',
     device        TEXT NOT NULL DEFAULT '',   -- the device that started it (devices.id)
+    owner_device  TEXT NOT NULL DEFAULT '',   -- C13: the device that holds this chat's context (session-handoff)
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
     deleted       INTEGER NOT NULL DEFAULT 0,
@@ -711,6 +712,11 @@ class Database:
             "CREATE INDEX IF NOT EXISTS turns_figures ON turns(ts, account_id, turn_start, turn_key, media, media_bytes, "
             "source, status, prompt_tokens, completion_tokens, trajectory, conversation, script, platform, run, model)"
         )
+        # C13 (session-handoff): the device that holds the conversation's full context, so
+        # another device of the account can hand a turn to it instead of replying locally.
+        # Empty means an old row (or a client that does not report it): it reads as the
+        # device that started the conversation. Owner is a device id, never a name.
+        add("sync_conversations", "owner_device", "TEXT NOT NULL DEFAULT ''")
 
     # -- 0.15: settings the operator changes while the relay runs ------------------------------
 

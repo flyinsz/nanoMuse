@@ -389,6 +389,32 @@ def test_sync_enabled_column_is_added_to_an_older_database(tmp_path):
     db.close()
 
 
+def test_owner_device_column_is_added_to_an_older_database(tmp_path):
+    """C13: a relay upgraded in place adds `sync_conversations.owner_device` (default '',
+    read as the creator) without touching the rows already there."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """CREATE TABLE accounts (id TEXT PRIMARY KEY, id_hash TEXT NOT NULL UNIQUE, channel TEXT NOT NULL, hint TEXT NOT NULL,
+             created_at INTEGER NOT NULL, granted INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0);
+           INSERT INTO accounts(id, id_hash, channel, hint, created_at) VALUES ('a1', 'h1', 'phone', '138****0000', 1);
+           CREATE TABLE sync_conversations (account_id TEXT NOT NULL, cid TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+             device TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+             deleted_at INTEGER, seq INTEGER NOT NULL, PRIMARY KEY (account_id, cid));
+           INSERT INTO sync_conversations(account_id, cid, kind, title, device, created_at, updated_at, seq)
+             VALUES ('a1', 'c1', 'main', 'Main', 'old-phone', 1, 1, 1);"""
+    )
+    conn.close()
+    db = Database(str(path))
+    assert "sync_conversations.owner_device" in db.added
+    with db.tx() as c:
+        row = c.execute("SELECT * FROM sync_conversations WHERE cid='c1'").fetchone()
+        assert row["owner_device"] == "" and row["device"] == "old-phone"
+    db.close()
+
+
 @pytest.fixture
 def ws_client():
     settings = Settings(database=":memory:", secret="test-secret", public_base="http://cloud.test", hub_frame_limit=4096)
@@ -690,6 +716,137 @@ def test_hub_carries_working_to_the_other_devices(ws_client):
         assert pc.receive_json()["type"] == "pong"
         ws_client.post("/v1/sync/working", json={"cid": cid, "working": False, "device": "pc-1"}, headers=headers)
         assert phone.receive_json()["working"] is False
+
+
+def test_hub_carries_stream_to_the_other_devices(ws_client):
+    """C13: `POST /v1/sync/stream` fans a server-built `stream` frame out to the account's
+    other devices, never back to the sender; a batch may carry text, reasoning and a tool,
+    a `done` frame ends the round, an unknown field and an unknown tool stage are dropped,
+    and nothing is stored."""
+    key = ws_sign_up(ws_client, "13800138000")
+    pc_key = ws_sign_up(ws_client, "13800138000")
+    headers = {"Authorization": f"Bearer {key}"}
+    with connect(ws_client, key) as phone, connect(ws_client, pc_key) as pc:
+        phone.send_json(hello("phone", "phone-1", "Pixel"))
+        phone.receive_json()  # welcome
+        phone.receive_json()  # devices
+        pc.send_json(hello("computer", "pc-1", "desk"))
+        pc.receive_json()  # welcome
+        pc.receive_json()  # devices
+        phone.receive_json()  # devices (pc arrived)
+        cid = uid()
+        ws_client.post(
+            "/v1/sync/changes",
+            json={"device": "pc-1", "conversations": [conv(cid, "main", owner_device="pc-1")]},
+            headers=headers,
+        )
+        phone.receive_json()  # sync
+        r = ws_client.post(
+            "/v1/sync/stream",
+            json={
+                "cid": cid,
+                "device": "pc-1",
+                "round": "r1",
+                "seq": 1,
+                "delta": "思考中",
+                "reasoning": "hmm",
+                "tool": {"name": "shell", "stage": "call"},
+            },
+            headers=headers,
+        )
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        frame = phone.receive_json()
+        assert frame["type"] == "stream" and frame["cid"] == cid and frame["from"] == "pc-1"
+        assert frame["round"] == "r1" and frame["seq"] == 1 and frame["delta"] == "思考中"
+        assert frame["reasoning"] == "hmm" and frame["tool"] == {"name": "shell", "stage": "call"}
+        assert frame["done"] is False
+        # the sender hears nothing of its own (its next frame is the pong)
+        pc.send_json({"type": "ping"})
+        assert pc.receive_json()["type"] == "pong"
+        # an unknown field and an unknown tool stage are dropped, the text still goes
+        ws_client.post(
+            "/v1/sync/stream",
+            json={"cid": cid, "device": "pc-1", "delta": "hi", "tool": {"name": "x", "stage": "dancing"}, "whatever": 1},
+            headers=headers,
+        )
+        frame = phone.receive_json()
+        assert frame["delta"] == "hi" and "tool" not in frame and "whatever" not in frame
+        # the round ends: a `done` frame with no text
+        ws_client.post("/v1/sync/stream", json={"cid": cid, "device": "pc-1", "round": "r1", "seq": 3, "done": True}, headers=headers)
+        end = phone.receive_json()
+        assert end["type"] == "stream" and end["done"] is True and "delta" not in end
+
+
+async def test_stream_validates_the_conversation_and_needs_something_to_say():
+    """C13: a frame with nothing on it is a bad request, an unknown or deleted cid answers
+    as `/v1/sync/working` does, sync off refuses both, and none of it disturbs working."""
+    app, client, sender, up, cloud, settings = make()
+    key = await signed_in(client, sender)
+    main = uid()
+    await client.post("/v1/sync/changes", json={"device": "pixel", "conversations": [conv(main, "main", "Main")]}, headers=auth(key))
+    # a frame carrying no delta, no reasoning, no tool and no done says nothing
+    r = await client.post("/v1/sync/stream", json={"cid": main, "device": "pixel"}, headers=auth(key))
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_request"
+    assert (await client.post("/v1/sync/stream", json={"cid": "not a cid", "delta": "x"}, headers=auth(key))).status_code == 400
+    assert (await client.post("/v1/sync/stream", json={"cid": uid(), "delta": "x"}, headers=auth(key))).status_code == 404
+    # an unknown field and an unknown tool stage are ignored, not refused
+    r = await client.post("/v1/sync/stream", json={"cid": main, "delta": "hi", "tool": {"name": "x", "stage": "wat"}}, headers=auth(key))
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    await client.delete(f"/v1/sync/conversations/{main}", headers=auth(key))
+    assert (await client.post("/v1/sync/stream", json={"cid": main, "delta": "x"}, headers=auth(key))).status_code == 404
+    # the existing working endpoint is unaffected by any of it
+    main2 = uid()
+    await client.post("/v1/sync/changes", json={"device": "pixel", "conversations": [conv(main2, "main", "Main")]}, headers=auth(key))
+    assert (
+        await client.post("/v1/sync/working", json={"cid": main2, "working": True, "device": "pixel"}, headers=auth(key))
+    ).status_code == 204
+    st = (await client.get("/v1/sync/state", headers=auth(key))).json()
+    assert st["working"][0]["cid"] == main2 and st["working"][0]["from"] == "pixel"
+    # sync off refuses both the same way
+    await client.put("/v1/sync/state", json={"enabled": False}, headers=auth(key))
+    r = await client.post("/v1/sync/stream", json={"cid": main2, "delta": "x"}, headers=auth(key))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "sync_off"
+
+
+async def test_owner_device_round_trips_and_an_old_client_never_clears_it():
+    """C13: a conversation's `owner_device` (the device that holds its context) goes up with
+    a push and comes back on the next pull, with the owner's name; a client that does not
+    know the field leaves a real owner alone, and a new conversation defaults to its creator."""
+    app, client, sender, up, cloud, settings = make()
+    key = await signed_in(client, sender)
+    account_id = cloud.authenticate(key).account_id
+    cloud.db.upsert_device(account_id, "pc-1", "Desk", "computer", "Linux", "0.1", "[]")
+    cloud.db.upsert_device(account_id, "phone-1", "Pixel", "phone", "Android", "0.1", "[]")
+    cid = uid()
+    await client.post(
+        "/v1/sync/changes",
+        json={"device": "phone-1", "conversations": [conv(cid, "main", "Main", owner_device="pc-1")]},
+        headers=auth(key),
+    )
+    c0 = (await client.get("/v1/sync/changes", headers=auth(key))).json()["conversations"][0]
+    assert c0["device"] == "phone-1" and c0["owner_device"] == "pc-1" and c0["owner_device_name"] == "Desk"
+    # an old app (no owner_device) renames it; the owner stays the desk
+    await client.post(
+        "/v1/sync/changes",
+        json={"device": "phone-1", "conversations": [conv(cid, "main", "Renamed", 1738000000, updated_at=1738000500)]},
+        headers=auth(key),
+    )
+    c0 = (await client.get("/v1/sync/changes", headers=auth(key))).json()["conversations"][0]
+    assert c0["title"] == "Renamed" and c0["owner_device"] == "pc-1"
+    # `@` hands it to the phone; the new owner and its name ride the pull
+    await client.post(
+        "/v1/sync/changes",
+        json={"device": "pc-1", "conversations": [conv(cid, "main", "Renamed", 1738000000, owner_device="phone-1", updated_at=1738000600)]},
+        headers=auth(key),
+    )
+    c0 = (await client.get("/v1/sync/changes", headers=auth(key))).json()["conversations"][0]
+    assert c0["owner_device"] == "phone-1" and c0["owner_device_name"] == "Pixel"
+    # a conversation a new client pushes without naming an owner defaults to its creator
+    cid2 = uid()
+    await client.post("/v1/sync/changes", json={"device": "phone-1", "conversations": [conv(cid2)]}, headers=auth(key))
+    out = (await client.get("/v1/sync/changes", headers=auth(key))).json()
+    row2 = next(c for c in out["conversations"] if c["cid"] == cid2)
+    assert row2["owner_device"] == "phone-1" and row2["owner_device_name"] == "Pixel"
 
 
 async def test_a_body_over_the_limit_names_both_sizes():
