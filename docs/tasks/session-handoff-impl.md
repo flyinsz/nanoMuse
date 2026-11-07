@@ -123,3 +123,72 @@ Android / iOS 若也要做，同样走侧信道，不得改用户消息文本。
   「改了哪些文件 + 检查命令的输出」报回来。
 - 遇到接口与本文不符：**以本文为准**；确实需要改接口时先说明，不要自己另起一套。
 - 不确定的地方**宁可少改**：低侵入优先，提 PR 通过率优先。
+
+---
+
+# 阶段二：闭环与三端（本轮）
+
+阶段一已提交（`89ffda6bf` 中继、`309013ef3` 运行时、`cf50be2bb` Mac、`35beabe99` Web）。
+本轮目标：**把代跑闭环接通**，并把 Web / Android 补齐。
+
+## 已确认的接入点（不要再找）
+
+| 事 | 位置 |
+|---|---|
+| 运行时收到中继帧的唯一分派 | `nanomuse/hub/client.py` 的 `_on_frame()`，第 342 行 `elif kind in ("sync", "working")` |
+| 该分支的去向 | `self.on_sync(frame)`，注册在 `nanomuse/hub/service.py:256`（`on_sync=self.svc.sync.on_frame`） |
+| 引擎接帧 | `nanomuse/sync/engine.py` 的 `on_frame()`（633 行）→ `_apply_working()`（644 行） |
+| 线程 ↔ cid 映射 | `engine.py` 的 `cid_of(thread_id)`（211）、`thread_of(cid)`（215）、`_cid_for(thread)`（263） |
+| 本地 Web 的流式入口 | `nanomuse/server/webui.py` 的 `on_text_delta` / `on_reasoning_delta`（381/394） |
+| 主会话常量 | `nanomuse/server/events.py:22` `MAIN_THREAD = "main"` |
+| 中继扇出 | `cloud/nanomuse_cloud/hub.py` 的 `notify_stream()`（348） |
+| Mac 的流式分派 | `harness/dsh-nanomuse/src/hub.ts` 的 `receive()` switch（约 400-446） |
+| Mac 的纯函数（已写好未接） | `harness/dsh-nanomuse/src/client/stream-buckets.ts` |
+| Android 派活 | `android/src/android/app/src/main/java/io/github/nanomuse/hub/HubActions.kt` 的 `task()`（289） |
+| Android 设备条 | `.../terminal/DeviceStrip.kt`、`RemoteTaskController.kt` |
+| Web 帧分派 | `web/src/store.tsx`（`stream_start`/`delta`/`reasoning_delta`/`stream_end` 分支） |
+
+## 本轮三流
+
+### W5 运行时（闭环：中继的帧喂给本机 Web）
+- `hub/client.py:342`：把 `"stream"` 并入该分支（`elif kind in ("sync", "working", "stream")`）。
+- `sync/engine.py` 的 `on_frame()`：新增 `frame.get("type") == "stream"` 的分支，调一个新方法
+  `_apply_stream(frame)`；**先按 `_apply_working` 的样子过滤**：`from` 是自己就返回、
+  `thread_of(cid)` 找到线程、`_eligible(thread)` 通过才继续。
+- `_apply_stream`：把 `delta` / `reasoning` / `tool` 交给本地 WebUI 的既有入口
+  （`on_text_delta` / `on_reasoning_delta`；工具行按既有 notice/工具卡片方式），
+  并**带上 `round`**，使本机 Web 能按 round 分桶。
+- ⚠️ 不得改动 `_apply_working` 的既有行为；`working` 与 `stream` 是两条独立的路。
+- 测试：`tests/` 加「中继 stream 帧 → 本机 Web 收到带 round 的 delta」「from 是自己时忽略」
+  「cid 找不到对应线程时忽略」。
+
+### W6 Mac（把流式接进实时视图）
+- `src/hub.ts` 的 `receive()` switch 加 `case 'stream'`，把帧交给
+  `src/client/stream-buckets.ts` 的 `readStreamFrame` → `applyStreamFrame`。
+- 把桶里的内容画成会话内气泡：照 `src/client/RemoteBubbles.ts` 现有的
+  MutationObserver + `data-nm-*` 属性写法，加 `.nm-stream` 气泡（**新文件优先**，
+  例如 `src/client/StreamBubbles.ts`，尽量不改 `RemoteBubbles.ts`）。
+- 这一条**只做 Mac 从「中继 → host 半 → 气泡」的完整链路**；不要动 `cloud.ts` 里
+  `askDevice` 的既有协议（那是阶段三「发起端代跑」的活）。
+- 测试：`tests/` 加纯函数层与帧解析的用例（`stream-buckets.test.mjs` 里已有基础，
+  按需补 `case 'stream'` 的分派测试）。
+- 检查：`npm run build && npm run typecheck && npm test`（`pnpm` 在本仓库报
+  `packages field missing or empty`，用 npm 等价命令）。
+
+### W7 Android（设备条接归属与运行态）
+- `.../terminal/DeviceStrip.kt`：设备条显示「当前会话由谁执行」的形态，与 Mac/Web 对齐
+  （文案进 `res/values/nm_strings.xml` 与 `res/values-zh/`，追加，不打乱既有）。
+- `.../terminal/RemoteTaskController.kt`：确认已有 in-flight 计数（上轮做的），
+  在本条链路上补「归属设备离线时不发、给出提示」。
+- ⚠️ Android 树是 OpenMinis 子树，**新代码放新文件**、只在既有文件里做最小改动；
+  不重构、不动上游文件结构。
+- 检查：`cd android/src/android && ./gradlew :app:testDebugUnitTest --tests 'io.github.nanomuse.*' --console=plain --no-daemon`
+  （本机无 JDK 时，报告无法运行，不要伪造结果）。
+- **注意**：本机大概率没有 JDK / Android SDK。若无法编译，**只做代码改动并如实说明未编译**，
+  不要伪造测试输出。
+
+## 纪律（与阶段一相同）
+
+- 只改自己那一栏的文件；不 commit；不动版本号 / `CHANGELOG.md`；`web/` 不许跑 `npm run build`。
+- 接口以本文与 `docs/session-handoff.md` 为准。
+- 回报：改了哪些文件、检查命令**实际输出**、不确定处。
