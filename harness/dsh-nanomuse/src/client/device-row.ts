@@ -143,6 +143,25 @@ export function newsIds(asks: readonly LiveAsk[], row: readonly RowFace[]): Set<
 }
 
 /**
+ * Which faces wear the spinner: the device a task was sent to that has not answered yet.
+ *
+ * One disc at most, because the composer keeps one device task at a time (`device-task.ts`).
+ * The spinner and the dot share the disc's corner and the spinner wins — work under way is
+ * the more urgent of the two and the only one that clears itself. An id the row does not know
+ * (a device that signed out mid-run) is dropped: a spinner on a disc that is not there says
+ * nothing. Only `asking` counts; a task already answered or failed has left the screen quiet.
+ */
+export function busyIds(
+  task: { phase: string; deviceId: string } | null | undefined,
+  row: readonly RowFace[],
+): Set<string> {
+  const ids = new Set<string>()
+  if (!task || task.phase !== 'asking' || !task.deviceId) return ids
+  if (row.some((f) => f.device.id === task.deviceId)) ids.add(task.deviceId)
+  return ids
+}
+
+/**
  * What a tap on a face asks the shell to do.
  *
  * `main` — show a chat of this computer's own, which is what picking this computer's face means

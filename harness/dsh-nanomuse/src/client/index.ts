@@ -402,11 +402,6 @@ export function apply(ctx: ClientContext): void {
   const AvatarChat = makeAvatarChat(t)
   slots.inject('shell.overlay', () =>
     slots.register({ name: 'shell.overlay', id: 'nanomuse.avatar-chat', locale: 'nanomuse' }, AvatarChat))
-  // The card for a message sent to another device with `@<device>` (the composer's other
-  // interception, in `interceptComposer`): what was asked and how it went.
-  const DeviceTaskCard = makeDeviceTask(t)
-  slots.inject('shell.overlay', () =>
-    slots.register({ name: 'shell.overlay', id: 'nanomuse.device-task', locale: 'nanomuse' }, DeviceTaskCard))
   ctx.effect(() => interceptComposer(), 'nanomuse: avatar words')
   // The account's Muses as one row above the composer (Android's `DeviceStrip`, the console's
   // `device-strip.ts`; the rules are in `device-row.ts`). A tap opens that device's own chat —
@@ -433,7 +428,13 @@ export function apply(ctx: ClientContext): void {
     () => peekLive().sync?.mainSession || mainChatId() || null,
   )
   slots.inject('conversation.input.dock', () =>
-    slots.register({ name: 'conversation.input.dock', id: 'nanomuse.devices', order: -7, locale: 'nanomuse' }, DeviceRow))
+    slots.register({ name: 'conversation.input.dock', id: 'nanomuse.devices', order: -7, locale: 'nanomuse', inject: (sessionId: string) => ({ sessionId }) }, DeviceRow))
+  // One quiet line in the chat a device task belongs to: the run is out. The question and its
+  // answer are lines of that chat kept by the host, so this line is only a progress hint —
+  // there is nothing to close, and closing or leaving it changes nothing about the run.
+  const DeviceTaskLine = makeDeviceTask(t)
+  slots.inject('conversation.input.dock', () =>
+    slots.register({ name: 'conversation.input.dock', id: 'nanomuse.device-task', order: -6, locale: 'nanomuse', inject: (sessionId: string) => ({ sessionId }) }, DeviceTaskLine))
   // The microphone at the right of the composer; "reply with a quote" beside Copy.
   const MicButton = makeMicButton(t, () => { shell.openSection(DICTATION_SECTION) })
   slots.inject('conversation.input.right', () =>

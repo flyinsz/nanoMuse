@@ -14,7 +14,7 @@ import { call, errorCode, failureText, type Translate } from './api.ts'
 import { buildPrompt, KEEP, MOOD_INSTRUCTIONS, png, still, type Estimate } from './AvatarStudio.tsx'
 import { AvatarShareSheet } from './AvatarShare.tsx'
 import { composerCard, composerEditable } from './composer.ts'
-import { addressedDevice, deviceTask } from './device-task.ts'
+import { addressedDevice, boundDevice, deviceTask } from './device-task.ts'
 import { IconClose, IconSpinner } from './icons.tsx'
 import { useLive } from './live.ts'
 import { peekWin } from './win.ts'
@@ -154,15 +154,18 @@ export function interceptComposer(): () => void {
     const text = (editable.innerText || editable.textContent || '').trim()
     if (!text) return false
     if (avatarChat.words(text)) { clear(editable); event.preventDefault(); event.stopPropagation(); return true }
-    // nanoMuse: "@Mac …" is work for that device, and it goes there directly rather than
-    // through this computer's Muse (see client/device-task.ts). Read after the avatar words,
-    // which are more particular ("change your avatar to …" names no device).
+    // nanoMuse: a chat kept for a device sends everything to that device, with or without an
+    // `@name` in the box. The mention was only ever a stand-in for this binding, and a prefill
+    // lost while the session mounts would otherwise hand the words to this computer's Muse —
+    // the person would be talking to the wrong machine without anything saying so. An explicit
+    // `@any-device` still wins, wherever it was typed, and its prefix comes off the message.
     const aimed = addressedDevice(text)
-    if (aimed !== null) {
+    const target = aimed ? { id: aimed.device.id, name: aimed.device.name } : boundDevice()
+    if (target !== null) {
       clear(editable)
       event.preventDefault()
       event.stopPropagation()
-      deviceTask.begin(aimed.device.name, aimed.device.id, aimed.text)
+      deviceTask.begin(target.name, target.id, aimed ? aimed.text : text)
       return true
     }
     const request = parseAvatarRequest(text)

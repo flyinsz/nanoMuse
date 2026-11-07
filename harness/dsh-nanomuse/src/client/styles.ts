@@ -1235,6 +1235,11 @@ html[data-nm-platform='darwin']:not([data-nm-fullscreen]) .nm-lib-col-top { heig
 .nm-ac { position: fixed; left: 50%; bottom: 108px; transform: translateX(-50%); z-index: 58; width: min(440px, calc(100vw - 32px)); padding: 12px 14px 14px; border-radius: 16px; background: var(--dsw-alias-bg-primary, #fff); color: var(--dsw-alias-label-primary); box-shadow: 0 18px 48px rgba(0,0,0,0.22), 0 0 0 1px var(--nm-divider); animation: nm-card-in 220ms ease-out; display: flex; flex-direction: column; gap: 10px; }
 @keyframes nm-card-in { from { opacity: 0; transform: translate(-50%, 8px) scale(0.98); } to { opacity: 1; transform: translateX(-50%); } }
 html[data-nm-profile] .nm-ac { left: calc(50% - 155px); }
+/* ---- a device task's progress line, inside the chat it belongs to (device-task.ts) ---- */
+.nm-dt-line { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 0 6px; padding: 7px 10px; border-radius: 10px; background: var(--nm-hover); color: var(--dsw-alias-label-secondary); font-size: 12.5px; }
+.nm-dt-line svg { flex: none; }
+.nm-dt-line-title { flex: none; font-weight: 600; }
+.nm-dt-line-asked { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
 .nm-ac-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .nm-ac-title { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); letter-spacing: 0.02em; }
 .nm-ac-desc { margin: 0; font-size: 14px; line-height: 1.45; }
@@ -1475,6 +1480,10 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
    this device and is waiting. At the disc rather than the slot, so it rides the disc as it grows
    and stays clear of the name under it. */
 .nm-device-face-dot { position: absolute; right: 2px; bottom: 0; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-1); }
+/* The same corner while a task this computer sent is still out at that device. A ring on a
+   light disc is hard to read, so it sits on its own small plate. The spinner wins over the
+   dot when both are due: work under way clears itself, a question does not. */
+.nm-device-face-busy { position: absolute; right: 1px; bottom: -1px; display: flex; align-items: center; justify-content: center; width: 11px; height: 11px; border-radius: 50%; background: var(--dsw-alias-bg-layer-1); color: var(--nm-accent, #0064d4); box-shadow: 0 0 0 1px var(--nm-divider, var(--dsw-alias-border-l2)); }
 `
 
 /** Put the stylesheet in the head once and mark the document as ours. */

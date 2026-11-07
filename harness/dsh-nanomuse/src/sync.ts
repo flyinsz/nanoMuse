@@ -339,6 +339,8 @@ export interface RemoteLine {
   keptAt?: number
   device: string
   deviceName: string
+  /** A question/answer of a device's own chat, kept by `askDevice` rather than pulled from the relay (C8). */
+  kind?: 'device-task'
 }
 
 /** The slice of the session API the engine uses; `cloud.ts` binds it to `ctx.sessionController`, tests fake it. */
@@ -671,6 +673,15 @@ export class SyncEngine {
       hidden: [...this.state.hidden],
       toArchive: [...this.state.toArchive],
     }
+  }
+
+  /**
+   * Something other than a pull changed the lines kept for a chat (a device task wrote its
+   * question, its answer, or a step). The browser half watches `rev` to re-read `/sync/remote`,
+   * so without this the answer would sit in the file until the next window focus.
+   */
+  touch(): void {
+    this.changed()
   }
 
   /** The conversation id a session syncs under, when it has one. */

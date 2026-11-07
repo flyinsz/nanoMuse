@@ -35,6 +35,8 @@ interface RemoteRow {
   deviceName: string
   /** The node key of the local prompt this turn is older than, when it is. */
   before: string | null
+  /** A device task's own Q/A: its user line is something said here, not a turn from elsewhere. */
+  kind?: 'device-task'
 }
 /** Another device working on this conversation right now (C9). */
 interface Working {
@@ -76,9 +78,13 @@ function bubble(t: Translate, row: RemoteRow): HTMLElement {
   root.setAttribute('data-nm-remote-mid', row.mid)
   const body = el('div', 'nm-remote-bubble', row.text)
   root.append(body)
-  const from = el('div', 'nm-remote-from', t('chFrom', { device: row.deviceName || row.device || '?' }))
-  if (row.at > 0) from.title = new Date(row.at).toLocaleString()
-  root.append(from)
+  // A device chat's question was typed here: "From X" would say the opposite of what happened.
+  // The answer below it keeps the label — that one really did come from the other device.
+  if (!(row.kind === 'device-task' && row.role === 'user')) {
+    const from = el('div', 'nm-remote-from', t('chFrom', { device: row.deviceName || row.device || '?' }))
+    if (row.at > 0) from.title = new Date(row.at).toLocaleString()
+    root.append(from)
+  }
   return root
 }
 

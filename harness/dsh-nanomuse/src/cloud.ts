@@ -694,6 +694,13 @@ export default class NanomuseCloud extends Service {
   /** The other devices' turns kept for the transcript (C8), by session. */
   private kept: RemoteStore | undefined
   /**
+   * A device task out of this computer, by the chat it belongs to. The chat's bubbles read it
+   * as a C9 presence line, so "X is working…" stands under the question while the run is out —
+   * and goes away when the answer lands, with no card to close and nothing in the browser half
+   * keeping the run alive.
+   */
+  private readonly deviceRuns = new Map<string, { from: string; deviceName: string; at: number; detail: string }>()
+  /**
    * What the sync needs of a session's log, read once per change: a session's log is read
    * in full (and decompressed) by `inspect`, so the title, the lines and the prompts'
    * positions are kept here until the session's next event (`session/event`) drops them.
@@ -3384,10 +3391,36 @@ export default class NanomuseCloud extends Service {
  * leaves the work running after the person was told it failed, and the answer then has
  * nowhere to land (upstream issue 805).
  */
-  async askDevice(device: string, text: string): Promise<{ device: string; answer: string; steps: string[] }> {
+  async askDevice(device: string, text: string, sessionId = ''): Promise<{ device: string; answer: string; steps: string[] }> {
     const asked = text.trim()
     if (!asked) throw new Error('What should it do?')
     const d = askTarget(this.hub, device)
+    const taskId = `dt:${randomUUID()}`
+    // The question and the answer are lines of the chat on screen, kept by the host. Nothing
+    // here depends on the browser half: a card closed, a chat left, the app reopened — the run
+    // still has somewhere to put its words, and the transcript keeps them after a restart.
+    const keep = (role: 'user' | 'assistant', body: string, suffix: string): void => {
+      if (!sessionId || !this.kept) return
+      this.kept.add(sessionId, {
+        mid: `${taskId}:${suffix}`,
+        role,
+        text: body,
+        at: Date.now(),
+        device: d.id,
+        deviceName: d.name,
+        kind: 'device-task',
+      })
+      this.sync?.touch()
+    }
+    // The chat's C9 line: "X is working…" under the question while the run is out, and gone
+    // when the answer lands. The bubbles already know how to draw it.
+    const working = (detail = ''): void => {
+      if (!sessionId) return
+      this.deviceRuns.set(sessionId, { from: d.id, deviceName: d.name, at: Date.now(), detail })
+      this.sync?.touch()
+    }
+    keep('user', asked, 'q')
+    working()
     const steps: string[] = []
     // The questions this run raised and the promises that go back to the device; answered in
     // `askEvent`, awaited together before the answer is returned so no card outlives the run.
@@ -3429,6 +3462,7 @@ export default class NanomuseCloud extends Service {
       } else if (stage === 'error') {
         steps.push(`error: ${String(body.message ?? 'error').slice(0, 160)}`)
       }
+      if (steps.length) working(steps[steps.length - 1] ?? '')
     }
     try {
       const body = await this.hub.call(
@@ -3441,11 +3475,19 @@ export default class NanomuseCloud extends Service {
       // An empty answer is not an answer (upstream issue 718): steps having run does not make
       // it one, and showing it as done is how a phone came to say "finished" for work undone.
       if (!answer) throw new Error(`${d.name} finished without an answer`)
+      keep('assistant', answer, 'a')
       return { device: d.name, answer, steps }
     } catch (error: unknown) {
+      // A failure belongs in the chat too: the question is already a line there, and leaving it
+      // without a reply reads as work still running.
+      keep('assistant', `(${d.name} could not finish: ${error instanceof Error ? error.message : String(error)})`, 'a')
       if (error instanceof HubError) throw new Error(`${error.code}: ${error.message}`)
       throw error
     } finally {
+      if (sessionId) {
+        this.deviceRuns.delete(sessionId)
+        this.sync?.touch()
+      }
       // The run is over: any card still up belongs to a step that will not run (the target's
       // own teardown cancels its pending approvals), so it comes down here and nothing goes
       // back over the hub. Awaiting after that lets every round-trip finish before the caller
@@ -4380,7 +4422,11 @@ export default class NanomuseCloud extends Service {
           const sessionId = url.searchParams.get('session') ?? ''
           // another account's chat shows no bubbles and no working line (C10)
           const remote = sessionId && sync.owns(sessionId) ? await this.remoteLines(this.ctx, sessionId) : { lines: [], prompts: [] }
-          return send(res, 200, { lines: remote.lines, prompts: remote.prompts, hidden: sync.view().hidden, working: sync.workingOf(sessionId) })
+          const run = this.deviceRuns.get(sessionId)
+          const working = sync.workingOf(sessionId) ?? (run
+            ? { from: run.from, deviceName: run.deviceName, at: run.at, state: 'working' as const, detail: run.detail }
+            : null)
+          return send(res, 200, { lines: remote.lines, prompts: remote.prompts, hidden: sync.view().hidden, working })
         }
         if (req.method === 'POST' && route === '/sync/archived') {
           const body = await json(req)
@@ -4395,7 +4441,9 @@ export default class NanomuseCloud extends Service {
       }
       if (req.method === 'POST' && route === '/devices/ask') {
         const body = await json(req)
-        return send(res, 200, await this.askDevice(String(body.device ?? ''), String(body.text ?? '')))
+        return send(res, 200, await this.askDevice(
+          String(body.device ?? ''), String(body.text ?? ''), String(body.sessionId ?? ''),
+        ))
       }
       if (req.method === 'POST' && route === '/devices/rename') {
         const body = await json(req)

@@ -13,6 +13,10 @@ import io.github.nanomuse.reach.RemoteApprovalKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -32,6 +36,17 @@ import java.util.concurrent.ConcurrentHashMap
 object RemoteTaskController {
     /** The target's own limit, `nanomuse/hub/service.py` TASK_TIMEOUT_S. */
     const val TIMEOUT_MS = 15 * 60_000L
+
+    /**
+     * Hub ids with a task this phone sent and has not heard back from, counted: two chats can
+     * have a run out at the same device, and the first one ending must not clear the second's
+     * spinner. A run takes minutes, so the device strip wears the spinner while the person waits;
+     * the console reads the same "in flight" answer off its own thread list. Kept here because
+     * [send] is the one place that knows a run started and the one place that knows it ended,
+     * whatever the outcome.
+     */
+    private val _inFlight = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val inFlight: StateFlow<Map<String, Int>> = _inFlight.asStateFlow()
 
     /** One line of what the run is doing, drawn under the person's message. */
     sealed interface Step {
@@ -81,6 +96,9 @@ object RemoteTaskController {
         onStep: (Step) -> Unit,
         stopFlag: () -> Boolean = { false },
     ): Outcome {
+        // The strip's spinner follows this run from the moment it leaves until its answer, its
+        // failure or a stop — the `finally` below is the only exit every one of those shares.
+        _inFlight.update { runs -> runs + (device.hubId to (runs[device.hubId] ?: 0) + 1) }
         val body = JSONObject()
             .put("text", text)
             .put("conversation", conversation)
@@ -162,6 +180,10 @@ object RemoteTaskController {
             return if (stopFlag()) Outcome.Stopped
             else Outcome.Failed(e.message ?: "the device did not answer")
         } finally {
+            _inFlight.update { runs ->
+                val left = (runs[device.hubId] ?: 0) - 1
+                if (left > 0) runs + (device.hubId to left) else runs - device.hubId
+            }
             // The run is over: a card still up belongs to a step that will not run (the target
             // tears its own pending questions down with the run), so it comes down here too. A
             // waiter woken by this finds its entry gone and sends nothing.

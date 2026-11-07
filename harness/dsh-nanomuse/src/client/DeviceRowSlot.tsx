@@ -29,8 +29,9 @@
  * `tests/device-row.test.mjs` with no renderer), the drawing is here.
  */
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { faceLabel, centringScroll, focusedFace, muses, newsIds, pickable, tapIntent, type RowFace } from './device-row.ts'
-import { IconLaptop, IconPhone } from './icons.tsx'
+import { busyIds, faceLabel, centringScroll, focusedFace, muses, newsIds, pickable, tapIntent, type RowFace } from './device-row.ts'
+import { setCurrentSession, useDeviceTask } from './device-task.ts'
+import { IconLaptop, IconPhone, IconSpinner } from './icons.tsx'
 import { useLive } from './live.ts'
 import { useWin } from './win.ts'
 import type { Translate } from './api.ts'
@@ -80,6 +81,9 @@ export interface DeviceRowProps {
  */
 export function DeviceRow({ t, openChat, openMain, showAsk, sessionId, mainChat }: DeviceRowProps): ReactNode {
   const live = useLive()
+  // One device task at a time, kept by the composer itself. Subscribing rather than reading
+  // once is what lets the disc follow the run from the send to the answer.
+  const task = useDeviceTask()
   const win = useWin()
   const box = useRef<HTMLDivElement | null>(null)
   const faces = useMemo(
@@ -87,6 +91,7 @@ export function DeviceRow({ t, openChat, openMain, showAsk, sessionId, mainChat 
     [live.hub.devices, live.hub.deviceId, live.hub.deviceChats],
   )
   const news = useMemo(() => newsIds(live.hub.asks, faces), [live.hub.asks, faces])
+  const busy = useMemo(() => busyIds(task, faces), [task, faces])
   // The chat on screen: the seat's own word first, the store as the fallback. The store is only
   // written once a different seat (the header's utilities) has mounted and run its effect, so on
   // the frame a chat opens it still names the previous one — the seat is never behind.
@@ -176,9 +181,18 @@ export function DeviceRow({ t, openChat, openMain, showAsk, sessionId, mainChat 
               className: 'nm-device-face-disc',
               style: { transform: isBig ? 'scale(1)' : `scale(${SHRUNK})` },
             }, h(face.device.kind === 'phone' ? IconPhone : IconLaptop, { size: 20 })),
-            // A device waiting on a question here wears the dot, at the disc's foot so it rides the
-            // disc as it grows and stays clear of the name under it.
-            waiting ? h('span', { className: 'nm-device-face-dot', 'data-testid': `nm-device-dot-${face.device.id}` }) : null),
+            // At the disc's foot, so it rides the disc as it grows and stays clear of the name
+            // under it. Work under way wins over a question waiting here: the spinner clears
+            // itself when the answer lands, the dot does not.
+            busy.has(face.device.id)
+              ? h('span', {
+                  className: 'nm-device-face-busy',
+                  'aria-label': t('dtWorking', { device: label }),
+                  'data-testid': `nm-device-busy-${face.device.id}`,
+                }, h(IconSpinner, { size: 10 }))
+              : waiting
+                ? h('span', { className: 'nm-device-face-dot', 'data-testid': `nm-device-dot-${face.device.id}` })
+                : null),
           h('span', { className: 'nm-device-face-name' }, label))
       }),
       h('span', { 'aria-hidden': true, className: 'nm-device-row-slack' })))
@@ -207,6 +221,10 @@ export function makeDeviceRow(
   // header's own seat, which mounts beside this one, so on the frame a chat opens it still names
   // the chat before it (measured: `win` empty while this seat already had the right id).
   return function DeviceRowSlot(props?: { sessionId?: string | undefined } | undefined): ReactNode {
+    // The dock is a session-scope slot: the seat it is mounted in *is* the chat on screen.
+    // Hand that id to the composer interceptor so a device's own chat sends its words to that
+    // device by itself, rather than depending on an `@name` prefill a session switch can lose.
+    setCurrentSession(props?.sessionId)
     const live = useLive()
     if (!live.hub.connected || live.hub.devices.length === 0) return null
     return h(DeviceRow, { t, openChat, openMain, showAsk, sessionId: props?.sessionId ?? null, mainChat: mainChatOf?.() ?? null })

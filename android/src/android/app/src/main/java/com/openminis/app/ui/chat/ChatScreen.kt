@@ -5588,6 +5588,11 @@ fun ChatScreen(
                 // second is not a chat with a device and so has no face of its own; this phone is
                 // the device it belongs to, and tapping that face opens the newest one still to
                 // read (nmOpenDeviceChat).
+                // A task this phone sent and has not heard back from: that device's disc wears
+                // the spinner. The console reads the same "in flight" answer off its own thread
+                // list; here the controller that sent the run is the one place that knows both
+                // when it left and when it ended.
+                val nmBusyDevices by io.github.nanomuse.terminal.RemoteTaskController.inFlight.collectAsState()
                 val nmNewsDevices = remember(nmSessions, nmSeenMarks, nmOtherIds, nmIncomingIds) {
                     val mine = nmSessions.mapNotNull { s ->
                         val hubId = io.github.nanomuse.terminal.DeviceChat.deviceOf(context, s.id)
@@ -5626,6 +5631,7 @@ fun ChatScreen(
                     // (its idle neighbours are 28dp).
                     focusedSize = 42.dp,
                     idleSize = 28.dp,
+                    busyIds = nmBusyDevices.keys,
                     newsIds = nmNewsDevices,
                     modifier = Modifier.padding(
                         horizontal = nmComposerHorizontalInset,

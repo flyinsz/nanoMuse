@@ -10,7 +10,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { centringScroll, faceLabel, focusedFace, isThisDevice, muses, newestAskFrom, newsIds, pickable, tapIntent } from '../src/client/device-row.ts'
+import { boundDeviceFor } from '../src/client/device-mention.ts'
+import { busyIds, centringScroll, faceLabel, focusedFace, isThisDevice, muses, newestAskFrom, newsIds, pickable, tapIntent } from '../src/client/device-row.ts'
 
 function device(over = {}) {
   return { id: 'd1', name: 'Mac mini', kind: 'computer', os: 'macOS', version: '1', online: true, last_seen: 0, controllable: true, actions: [], ...over }
@@ -223,4 +224,55 @@ test('the order the roll moves over does not change when a device chat opens', (
   const before = muses(devices, 'me').map((f) => f.device.id)
   const after = muses(devices, 'me', { chatFor: (id) => (id === 'b' ? 'session-b' : null) }).map((f) => f.device.id)
   assert.deepEqual(before, after)
+})
+
+// ── the spinner: a task sent and not yet answered ──────────────────────────────────
+test('a task in flight puts the spinner on the disc it went to', () => {
+  const row = muses([device({ id: 'me' }), device({ id: 'p1' }), device({ id: 'd2' })], 'me')
+  assert.deepEqual([...busyIds({ phase: 'asking', deviceId: 'p1' }, row)], ['p1'])
+})
+
+test('an answered or failed task leaves the row quiet', () => {
+  const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
+  assert.equal(busyIds({ phase: 'answered', deviceId: 'p1' }, row).size, 0)
+  assert.equal(busyIds({ phase: 'failed', deviceId: 'p1' }, row).size, 0)
+  assert.equal(busyIds({ phase: 'idle', deviceId: 'p1' }, row).size, 0)
+})
+
+test('no task, or a task with no device, puts a spinner nowhere', () => {
+  const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
+  assert.equal(busyIds(null, row).size, 0)
+  assert.equal(busyIds(undefined, row).size, 0)
+  assert.equal(busyIds({ phase: 'asking', deviceId: '' }, row).size, 0)
+})
+
+test('a spinner is never drawn on a disc the row does not have', () => {
+  const row = muses([device({ id: 'me' }), device({ id: 'p1' })], 'me')
+  assert.equal(busyIds({ phase: 'asking', deviceId: 'signed-out' }, row).size, 0)
+})
+
+// ── a device's own chat sends its words to that device, with no @name ───────────
+test('the chat on screen names the device a message belongs to', () => {
+  const devices = [device({ id: 'me' }), device({ id: 'p1', name: 'Mac mini' })]
+  assert.deepEqual(boundDeviceFor('session-1', { p1: 'session-1' }, devices), { id: 'p1', name: 'Mac mini' })
+})
+
+test('the main chat and an unknown chat belong to no device', () => {
+  const devices = [device({ id: 'me' }), device({ id: 'p1' })]
+  assert.equal(boundDeviceFor('main', { p1: 'session-1' }, devices), null)
+  assert.equal(boundDeviceFor(null, { p1: 'session-1' }, devices), null)
+  assert.equal(boundDeviceFor('session-1', undefined, devices), null)
+})
+
+test('a device that went offline or lost its name is not a target', () => {
+  const devices = [device({ id: 'p1', name: 'Mac mini', online: false }), device({ id: 'p2', name: '  ' })]
+  assert.equal(boundDeviceFor('session-1', { p1: 'session-1' }, devices), null)
+  assert.equal(boundDeviceFor('session-2', { p2: 'session-2' }, devices), null)
+})
+
+test('two device chats stay separate', () => {
+  const devices = [device({ id: 'p1', name: 'A' }), device({ id: 'p2', name: 'B' })]
+  const chats = { p1: 'session-1', p2: 'session-2' }
+  assert.equal(boundDeviceFor('session-2', chats, devices)?.id, 'p2')
+  assert.equal(boundDeviceFor('session-1', chats, devices)?.id, 'p1')
 })

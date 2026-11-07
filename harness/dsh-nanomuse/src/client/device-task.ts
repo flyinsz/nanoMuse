@@ -16,8 +16,8 @@
  */
 import { createElement as h, useSyncExternalStore, type ReactNode } from 'react'
 import { call, failureText, type Translate } from './api.ts'
-import { deviceMention } from './device-mention.ts'
-import { IconClose, IconSpinner } from './icons.tsx'
+import { boundDeviceFor, deviceMention, type BoundDevice } from './device-mention.ts'
+import { IconSpinner } from './icons.tsx'
 import { peekLive, type LiveDevice } from './live.ts'
 
 /** The answer to one `@<device>` message, as the host half reports it. */
@@ -37,6 +37,10 @@ export interface DeviceTaskState {
   phase: 'idle' | 'asking' | 'answered' | 'failed'
   /** The device's name, for the card's title. */
   device: string
+  /** The hub id, so the device strip can wear the spinner on the disc the run went to. */
+  deviceId: string
+  /** The chat this run belongs to: the host keeps its question and answer as lines of that chat. */
+  sessionId: string
   /** What was asked, kept so the card can say it while the run is out. */
   asked: string
   answer: string
@@ -45,7 +49,7 @@ export interface DeviceTaskState {
   error?: unknown
 }
 
-const IDLE: DeviceTaskState = { phase: 'idle', device: '', asked: '', answer: '', steps: [] }
+const IDLE: DeviceTaskState = { phase: 'idle', device: '', deviceId: '', sessionId: '', asked: '', answer: '', steps: [] }
 
 let state: DeviceTaskState = IDLE
 let round = 0
@@ -65,6 +69,24 @@ export function useDeviceTask(): DeviceTaskState {
     () => state,
     () => state,
   )
+}
+
+/**
+ * The chat on screen, as the dock's own session seat reports it. The window store is written
+ * by a different seat and lags a frame; the seat itself *is* the chat, so it is the one to
+ * trust when deciding where a message belongs.
+ */
+let currentSession: string | null = null
+
+/** The device row hands the chat on screen down; the composer interceptor reads it from here. */
+export function setCurrentSession(sessionId: string | null | undefined): void {
+  currentSession = sessionId ?? null
+}
+
+/** The device whose own chat is on screen, when there is one. */
+export function boundDevice(): BoundDevice | null {
+  const hub = peekLive().hub
+  return boundDeviceFor(currentSession, hub.deviceChats, hub.devices)
 }
 
 /** The devices a message may be addressed to: the ones online, this computer never one of them. */
@@ -89,33 +111,37 @@ export function deviceTaskView(t: Translate, s: DeviceTaskState): { title: strin
 }
 
 /**
- * The card the composer's `@<device>` path shows, above the input, the way `avatarChat`'s
- * card does: what was asked, then either that the device is on it, its answer, or why it
- * could not finish. A run takes minutes, so something has to say it is out; without this
- * the message went out and the screen said nothing at all.
+ * The composer's `@<device>` path: the question and the answer are lines of the chat itself,
+ * kept by the host (`cloud.ts` `askDevice`), so a run survives a closed progress line, a chat
+ * left, and a restart. All this seat does is say the run is out, in the chat it belongs to, for
+ * as long as it is out — one line above the composer instead of a card over the frame. The
+ * device's disc wears a spinner too, and the chat's own C9 line says what step the run is on.
  */
 export function makeDeviceTask(t: Translate) {
-  return function DeviceTaskCard(): ReactNode {
+  return function DeviceTaskLine(props?: { sessionId?: string | undefined } | undefined): ReactNode {
+    // A second place the chat on screen is known: this seat has its own session id, so the
+    // composer's interceptor is not left guessing if the device row's seat ever mounts first.
+    if (props?.sessionId) setCurrentSession(props.sessionId)
     const s = useDeviceTask()
-    if (s.phase === 'idle') return null
+    if (s.phase !== 'asking') return null
+    // A session-scope seat: a run belongs to one chat. Leaving for another chat must not carry
+    // its progress along, and coming back must find it still there.
+    if (props?.sessionId && s.sessionId && s.sessionId !== props.sessionId) return null
     const view = deviceTaskView(t, s)
-    const steps = s.steps.slice(-5)
-    return h('div', { className: `nm-ac nm-dt nm-dt-${view.tone}`, role: 'status', 'aria-label': view.title },
-      h('div', { className: 'nm-ac-head' },
-        h('span', { className: 'nm-ac-title' }, view.title),
-        h('button', { type: 'button', className: 'nm-icon-btn', 'aria-label': t('close'), onClick: deviceTask.dismiss }, h(IconClose, { size: 14 }))),
-      h('div', { className: 'nm-ac-cost' },
-        view.tone === 'busy' ? h('p', { className: 'nm-ac-status nm-live' }, h(IconSpinner, { size: 14 }), view.body) : h('p', { className: 'nm-ac-desc' }, view.body),
-        steps.length ? h('ul', { className: 'nm-dt-steps' }, steps.map((line, i) => h('li', { key: i }, line))) : null))
+    return h('div', { className: 'nm-dt-line', role: 'status', 'aria-label': view.title },
+      h(IconSpinner, { size: 14 }),
+      h('span', { className: 'nm-dt-line-title' }, view.title),
+      h('span', { className: 'nm-dt-line-asked' }, s.asked))
   }
 }
 
 export const deviceTask = {
-  /** Send it and follow the run; the card shows where it stands. */
+  /** Send it; the host keeps the question and the answer as lines of the chat on screen. */
   begin(device: string, deviceId: string, text: string): void {
     const mine = ++round
-    set({ ...IDLE, phase: 'asking', device, asked: text })
-    call<DeviceAnswer>('devices/ask', { device: deviceId, text })
+    const sessionId = currentSession ?? ''
+    set({ ...IDLE, phase: 'asking', device, deviceId, asked: text, sessionId })
+    call<DeviceAnswer>('devices/ask', { device: deviceId, text, sessionId })
       .then((r) => {
         if (round !== mine) return
         set({ phase: 'answered', answer: r.answer, steps: Array.isArray(r.steps) ? r.steps : [] })
@@ -124,10 +150,5 @@ export const deviceTask = {
         if (round !== mine) return
         set({ phase: 'failed', error })
       })
-  },
-  /** The card is done with. */
-  dismiss(): void {
-    round++
-    set(IDLE)
   },
 }

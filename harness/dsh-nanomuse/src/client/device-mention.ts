@@ -86,3 +86,29 @@ export function deviceMention(text: string, devices: readonly LiveDevice[]): Dev
   if (device === undefined) return null
   return { device, text: named.text }
 }
+
+/** A device the chat on screen belongs to: everything said there goes to it, no `@name` needed. */
+export interface BoundDevice {
+  id: string
+  name: string
+}
+
+/**
+ * The device whose own chat is on screen, if any. The row above the composer keeps one chat
+ * per device (`deviceChats`, device id → session id), so the chat itself says where a message
+ * belongs — the `@name` the composer prefilled was only ever a stand-in for this binding, and
+ * it can be lost while the new session mounts. An offline or nameless device is not a target:
+ * sending there would fail, and the ordinary path is a better answer than a spinner with
+ * nowhere to land. The explicit `@any-device` in the message still wins over this.
+ */
+export function boundDeviceFor(
+  sessionId: string | null | undefined,
+  deviceChats: Record<string, string> | null | undefined,
+  devices: readonly LiveDevice[],
+): BoundDevice | null {
+  if (!sessionId || !deviceChats) return null
+  const entry = Object.entries(deviceChats).find(([, chat]) => chat === sessionId)
+  if (!entry) return null
+  const device = devices.find((d) => d.id === entry[0] && d.online && d.name.trim() !== '')
+  return device ? { id: device.id, name: device.name } : null
+}
