@@ -30,6 +30,7 @@ import { StopAsk, makeThumbs } from './Feedback.tsx'
 import { interceptComposer, makeAvatarChat } from './AvatarChat.tsx'
 import { makeDeviceTask } from './device-task.ts'
 import { makeDeviceRow } from './DeviceRowSlot.tsx'
+import { makeExecutorLine } from './ExecutorLine.tsx'
 import { makeCapsule } from './Capsule.tsx'
 import { prefillComposer } from './composer.ts'
 import { makeMicButton, makeQuoteAction } from './ComposerExtras.tsx'
@@ -402,7 +403,7 @@ export function apply(ctx: ClientContext): void {
   const AvatarChat = makeAvatarChat(t)
   slots.inject('shell.overlay', () =>
     slots.register({ name: 'shell.overlay', id: 'nanomuse.avatar-chat', locale: 'nanomuse' }, AvatarChat))
-  ctx.effect(() => interceptComposer(), 'nanomuse: avatar words')
+  ctx.effect(() => interceptComposer(t), 'nanomuse: avatar words')
   // The account's Muses as one row above the composer (Android's `DeviceStrip`, the console's
   // `device-strip.ts`; the rules are in `device-row.ts`). A tap opens that device's own chat —
   // one per device, so the same pick returns to the same window — with `@name` already in its
@@ -435,6 +436,11 @@ export function apply(ctx: ClientContext): void {
   const DeviceTaskLine = makeDeviceTask(t)
   slots.inject('conversation.input.dock', () =>
     slots.register({ name: 'conversation.input.dock', id: 'nanomuse.device-task', order: -6, locale: 'nanomuse', inject: (sessionId: string) => ({ sessionId }) }, DeviceTaskLine))
+  // Which device runs this conversation (C13): a fixed line above the composer, so `@Desk` moving
+  // the owner is visible and a sentence about to be sent elsewhere is not a surprise.
+  const ExecutorLine = makeExecutorLine(t)
+  slots.inject('conversation.input.dock', () =>
+    slots.register({ name: 'conversation.input.dock', id: 'nanomuse.executor', order: -7.5, locale: 'nanomuse', inject: (sessionId: string) => ({ sessionId }) }, ExecutorLine))
   // The microphone at the right of the composer; "reply with a quote" beside Copy.
   const MicButton = makeMicButton(t, () => { shell.openSection(DICTATION_SECTION) })
   slots.inject('conversation.input.right', () =>

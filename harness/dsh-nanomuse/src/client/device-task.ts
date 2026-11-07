@@ -17,6 +17,8 @@
 import { createElement as h, useSyncExternalStore, type ReactNode } from 'react'
 import { call, failureText, type Translate } from './api.ts'
 import { boundDeviceFor, deviceMention, type BoundDevice } from './device-mention.ts'
+import { ownerOf, setOwner } from './owner-store.ts'
+import { executorOf, routeMessage, type OwnerTarget } from './session-owner.ts'
 import { IconSpinner } from './icons.tsx'
 import { peekLive, type LiveDevice } from './live.ts'
 
@@ -100,6 +102,37 @@ export function reachableDevices(): LiveDevice[] {
  */
 export function addressedDevice(text: string): { device: LiveDevice; text: string } | null {
   return deviceMention(text, reachableDevices())
+}
+
+/**
+ * Where a sentence typed here goes (C13): the `@` it opens with, else the conversation's owner,
+ * else the device whose chat it is, else this computer. The rules are `session-owner.ts`; this
+ * reads the live state and the record for them, and hands back the mention taken out of the text
+ * together with the owner to record. `thisLabel` is the word the row gives this computer
+ * (`drThisDevice`), so `@本机` and this machine's own name both come home.
+ */
+export function takeRoute(text: string, thisLabel: string): { target: OwnerTarget; text: string } {
+  const hub = peekLive().hub
+  const route = routeMessage({
+    text,
+    selfName: hub.deviceName,
+    thisLabel,
+    selfId: hub.deviceId,
+    devices: hub.devices,
+    owner: ownerOf(currentSession),
+    bound: boundDevice(),
+  })
+  // A mention that moved the owner is written down here, so the next plain sentence follows it;
+  // a plain sentence leaves the record alone. One function, so no caller can route without
+  // recording, and the line above the composer can never disagree with where the words went.
+  if (route.owner !== undefined) setOwner(currentSession, route.owner)
+  return { target: route.target, text: route.text }
+}
+
+/** Who runs the conversation on screen right now, for the line above the composer. */
+export function currentExecutor(): OwnerTarget {
+  const hub = peekLive().hub
+  return executorOf(ownerOf(currentSession), boundDevice(), hub.devices, hub.deviceId)
 }
 
 /** What a card needs to word itself, in the UI language. */

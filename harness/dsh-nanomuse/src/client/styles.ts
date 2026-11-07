@@ -1240,6 +1240,12 @@ html[data-nm-profile] .nm-ac { left: calc(50% - 155px); }
 .nm-dt-line svg { flex: none; }
 .nm-dt-line-title { flex: none; font-weight: 600; }
 .nm-dt-line-asked { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
+/* ---- which device runs this conversation, above the composer (ExecutorLine.tsx, C13) ---- */
+.nm-ex-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 6px; padding: 2px 4px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.nm-ex-line svg { flex: none; opacity: 0.85; }
+.nm-ex-line-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nm-ex-self .nm-ex-line-text { opacity: 0.75; }
+.nm-ex-off { color: var(--dsw-alias-state-warn-primary); }
 .nm-ac-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .nm-ac-title { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); letter-spacing: 0.02em; }
 .nm-ac-desc { margin: 0; font-size: 14px; line-height: 1.45; }

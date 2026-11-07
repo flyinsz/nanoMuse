@@ -1555,6 +1555,10 @@ export const en = {
   rfNewChat: 'New chat',
   rfSignIn: 'Sign in',
   rfSettings: 'Open Settings → nanoMuse Cloud',
+  // the line above the composer saying which device runs this conversation (C13)
+  exRuns: 'Run by {device}',
+  exOffline: '{device} is offline, nothing will be sent',
+  exSelf: 'Run by this computer',
 }
 
 export const zh: typeof en = {
@@ -3089,6 +3093,10 @@ export const zh: typeof en = {
   rfNewChat: '新聊天',
   rfSignIn: '登录',
   rfSettings: '打开「设置 → nanoMuse Cloud」',
+  // the line above the composer saying which device runs this conversation (C13)
+  exRuns: '由 {device} 执行',
+  exOffline: '{device} 离线，这条不会发出',
+  exSelf: '由本机执行',
 }
 
 export type Words = keyof typeof en

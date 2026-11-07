@@ -14,7 +14,7 @@ import { call, errorCode, failureText, type Translate } from './api.ts'
 import { buildPrompt, KEEP, MOOD_INSTRUCTIONS, png, still, type Estimate } from './AvatarStudio.tsx'
 import { AvatarShareSheet } from './AvatarShare.tsx'
 import { composerCard, composerEditable } from './composer.ts'
-import { addressedDevice, boundDevice, deviceTask } from './device-task.ts'
+import { deviceTask, takeRoute } from './device-task.ts'
 import { IconClose, IconSpinner } from './icons.tsx'
 import { useLive } from './live.ts'
 import { peekWin } from './win.ts'
@@ -147,7 +147,7 @@ export const avatarChat = {
  * button are the two ways out; an avatar request (or a pick while candidates are
  * shown) is taken here and never sent.
  */
-export function interceptComposer(): () => void {
+export function interceptComposer(t: Translate): () => void {
   const take = (event: Event): boolean => {
     const editable = composerEditable()
     if (!editable) return false
@@ -157,17 +157,23 @@ export function interceptComposer(): () => void {
     // nanoMuse: a chat kept for a device sends everything to that device, with or without an
     // `@name` in the box. The mention was only ever a stand-in for this binding, and a prefill
     // lost while the session mounts would otherwise hand the words to this computer's Muse —
-    // the person would be talking to the wrong machine without anything saying so. An explicit
-    // `@any-device` still wins, wherever it was typed, and its prefix comes off the message.
-    const aimed = addressedDevice(text)
-    const target = aimed ? { id: aimed.device.id, name: aimed.device.name } : boundDevice()
-    if (target !== null) {
+    // the person would be talking to the wrong machine without anything saying so. From C13 the
+    // binding is one of three: an `@` in the words (which also moves the conversation's owner),
+    // the owner the person set before, or the device whose chat this is. `takeRoute` reads them
+    // in that order and writes the owner down, so the next plain sentence follows the mention.
+    const route = takeRoute(text, t('drThisDevice'))
+    if (route.target.kind === 'device') {
       clear(editable)
       event.preventDefault()
       event.stopPropagation()
-      deviceTask.begin(target.name, target.id, aimed ? aimed.text : text)
+      deviceTask.begin(route.target.name, route.target.id, route.text)
       return true
     }
+    // `@本机` comes here: the owner is already switched back by `takeRoute`, and this computer's
+    // own turn is the harness's, so nothing is taken over. The mention itself is left in the
+    // words, exactly as the runtime's `parse_mention` leaves it (its `self_id` rule returns None
+    // and the sentence goes through whole) — stripping it here would be this client's own idea of
+    // the text, and the two ends would disagree about what the person said.
     const request = parseAvatarRequest(text)
     if (!request) return false
     clear(editable)
