@@ -337,6 +337,11 @@ class Thread:
     device_name: str = ""
     # a chat another device opened here with a `task` over the hub: who asked
     remote_from: dict[str, Any] | None = None
+    # contract C13: this thread's current turn was handed off by another device (the
+    # `task` call's `handoff`); distinct from `remote_from` so the thread still syncs.
+    # It describes one in-flight round, so it is deliberately not persisted (a restart
+    # ends that round; `remote_from` is the thread's lasting provenance and is).
+    handoff_from: dict[str, Any] | None = None
     # a chat that came in through conversation sync (contract C7): the device that started
     # it, for the "From Pixel 8" badge; "" for chats started here
     origin_device: str = ""
@@ -360,6 +365,8 @@ class Thread:
             meta["device_name"] = self.device_name
         if self.remote_from:
             meta["remote_from"] = self.remote_from
+        if self.handoff_from:
+            meta["handoff_from"] = self.handoff_from
         if self.origin_device:
             meta["origin_device"] = self.origin_device
             meta["origin_device_name"] = self.origin_device_name

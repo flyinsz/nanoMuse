@@ -924,10 +924,36 @@ class HubService:
             await call.fail("usage", "text is required")
             return
         conversation = str(call.args.get("conversation") or call.sender_id or "device")
-        thread = self._incoming_thread(call, conversation)
+        # Contract C13: a `thread` names a conversation *this computer already holds* (its
+        # own, `main` included) — the round runs on that one, with its full local context,
+        # not on a fresh `From <name>`. A caller that sends no `thread` (every older
+        # client) takes the original path unchanged: a side chat is opened for it.
+        handoff_from = (
+            {
+                "device": call.sender_id,
+                "name": call.sender_name,
+                "kind": str(call.sender.get("kind") or ""),
+                "conversation": conversation,
+            }
+            if call.args.get("handoff")
+            else None
+        )
+        target = self.svc.threads.get(str(call.args.get("thread") or ""))
+        thread = target if target is not None else self._incoming_thread(call, conversation)
+        # One driver per conversation, whether the run is local or handed off (C13): a run
+        # already under way here or in another device's round is refused outright — the
+        # message is never folded into the running turn (`agent/core.py._drain_inbox`).
         if thread.busy or thread.device:
             await call.fail("busy", "this conversation is already busy")
             return
+        if target is not None and handoff_from is not None:
+            # A distinct marker from `remote_from`: that one excludes a thread from sync
+            # (`sync/engine.py._eligible()`), and a handed-off round must keep syncing. It
+            # describes this round alone, so it is cleared when the round ends, not saved.
+            # (Only when we really ran on the named thread: the `_incoming_thread` fallback
+            # already carries its provenance on `remote_from`.)
+            thread.handoff_from = handoff_from
+            self.svc.bus.publish({"kind": "thread", "thread": thread.meta()})
         queue = self.svc.bus.subscribe()
         try:
             # `language`: the asking device's UI language (optional, docs/hub.md); the
@@ -957,6 +983,9 @@ class HubService:
         finally:
             self.svc.bus.unsubscribe(queue)
             self._incoming.pop(call.id, None)
+            if handoff_from is not None and thread.handoff_from is handoff_from:
+                thread.handoff_from = None
+                self.svc.bus.publish({"kind": "thread", "thread": thread.meta()})
         await call.result(
             {
                 "text": final,
@@ -1015,9 +1044,44 @@ class HubService:
                     started = True
                 elif started and not meta.get("queued"):
                     break
+            elif kind in ("stream_start", "delta", "reasoning_delta", "stream_end"):
+                # Contract C13, stage three: the run's text as it is written, so the caller
+                # draws it live instead of waiting for the final answer. The bus frames come
+                # from `server/webui.py` (`on_text_delta` / `on_reasoning_delta`); only this
+                # conversation's are relayed.
+                if msg.get("thread") != thread.id:
+                    continue
+                await self._forward_stream(call, kind, msg)
         if stopped:
             raise _RunStopped
         return final or self.svc.ui.last_assistant_text.get(thread.id, "")
+
+    async def _forward_stream(self, call: IncomingCall, kind: str, msg: dict[str, Any]) -> None:
+        """One streaming frame, as a task event for the caller. ``delta`` and
+        ``reasoning_delta`` are *increments* (`partial: true`), unlike the whole-block
+        ``stage:"text"`` of :meth:`_forward_event` (``interim: true``), so a caller can tell
+        which of the two it is holding and append or replace accordingly."""
+        sid = msg.get("id")
+        if kind == "delta":
+            await call.event(
+                {"stage": "delta", "id": sid, "text": msg.get("text") or "", "partial": True}
+            )
+        elif kind == "reasoning_delta":
+            await call.event(
+                {
+                    "stage": "reasoning_delta",
+                    "id": sid,
+                    "text": msg.get("text") or "",
+                    "partial": True,
+                }
+            )
+        elif kind == "stream_start":
+            await call.event({"stage": "stream_start", "id": sid})
+        else:  # stream_end
+            body: dict[str, Any] = {"stage": "stream_end", "id": sid}
+            if msg.get("discard"):
+                body["discard"] = True
+            await call.event(body)
 
     async def _forward_event(
         self, call: IncomingCall, ev: dict[str, Any], *, fresh: bool = True

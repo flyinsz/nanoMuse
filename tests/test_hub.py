@@ -29,6 +29,7 @@ from nanomuse.hub.client import HubClient, HubError
 from nanomuse.llm import MockLLM
 from nanomuse.schema import Function, LLMResponse, ToolCall
 from nanomuse.server import create_app
+from nanomuse.server.events import MAIN_THREAD
 from nanomuse.server.service import MuseService
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="posix shell in the tests")
@@ -899,6 +900,187 @@ def test_task_from_a_device_runs_in_a_visible_side_chat(hub_server) -> None:
         (PHONE["id"], "conv-1"),
         ("tablet-1", "conv-1"),
     }
+
+
+def test_a_task_with_a_thread_runs_on_that_existing_conversation(hub_server) -> None:
+    """Contract C13: a caller that names an existing thread (``thread``) hands the turn to
+    that conversation — its own memory, not a fresh `From <name>` side chat — and the round
+    is marked with a *new* field ``handoff_from``, never ``remote_from`` (which would stop
+    the thread syncing)."""
+    client, service, llm, relay = hub_server
+    sign_in(client)
+    wait_for(lambda: client.get("/api/hub").json()["state"] == "connected")
+    service.settings.sentinel.mode = "auto"
+    main = service.threads["main"]
+    before = len(service.threads)
+    llm.script.append(LLMResponse(content="Answered with the desk's own memory"))
+    relay.call_runtime(
+        "task",
+        {
+            "text": "continue this chat",
+            "conversation": "conv-main",
+            "thread": "main",
+            "handoff": True,
+        },
+        "h1",
+    )
+    # the turn ran in `main`; no side chat was opened for the caller
+    res = relay.next_frame("result")
+    assert res["id"] == "h1" and res["ok"] is True
+    assert res["body"]["text"] == "Answered with the desk's own memory"
+    assert res["body"]["thread"] == "main"
+    assert len(service.threads) == before
+    # the marker rides on the thread while the round runs and is a *handoff*, not `remote_from`
+    assert main.handoff_from is None  # cleared once the round ended
+    assert main.remote_from is None
+    # the text is in the main chat, as an ordinary user bubble marked `via` the caller
+    user = [
+        e
+        for e in client.get(f"/api/threads/{MAIN_THREAD}/events").json()["events"]
+        if e["type"] == "user"
+    ][-1]
+    assert user["text"] == "continue this chat" and user.get("via") == "Pixel"
+
+
+def test_a_handed_off_round_is_marked_but_still_syncs(hub_server, monkeypatch) -> None:
+    """The marker that says "another device handed this round off" is ``handoff_from``, and
+    the sync engine must still push the conversation: only ``remote_from`` excludes it."""
+    client, service, llm, relay = hub_server
+    sign_in(client)
+    wait_for(lambda: client.get("/api/hub").json()["state"] == "connected")
+    service.settings.sentinel.mode = "auto"
+    main = service.threads["main"]
+    # what the sync engine decides about a thread: handed-off rounds stay eligible
+    main.handoff_from = {"device": "phone-1", "name": "Pixel", "conversation": "conv-main"}
+    assert service.sync._eligible(main) is True
+    # while a *thread of another device* (remote_from) is not
+    side = service.create_thread("From Pixel")
+    side.remote_from = {"device": "phone-1", "name": "Pixel", "conversation": "c"}
+    assert service.sync._eligible(side) is False
+    main.handoff_from = None
+
+
+def test_a_handoff_round_is_marked_on_the_thread_frame(hub_server) -> None:
+    """The thread frame a caller sees while its handed-off round runs carries
+    ``handoff_from`` (so a UI can draw "run by <device>"), distinct from ``remote_from``."""
+    client, service, llm, relay = hub_server
+    sign_in(client)
+    wait_for(lambda: client.get("/api/hub").json()["state"] == "connected")
+    service.settings.sentinel.mode = "auto"
+    queue = service.bus.subscribe()
+    llm.script.append(LLMResponse(content="ok"))
+    try:
+        relay.call_runtime(
+            "task", {"text": "hi", "conversation": "c", "thread": "main", "handoff": True}, "h2"
+        )
+        assert relay.next_frame("result")["ok"] is True
+    finally:
+        service.bus.unsubscribe(queue)
+    frames: list[dict[str, Any]] = []
+    while not queue.empty():
+        msg = queue.get_nowait()
+        if msg.get("kind") == "thread" and msg["thread"]["id"] == "main":
+            frames.append(msg["thread"])
+    # during the round the main thread carried the marker; afterwards it is gone
+    marked = [m for m in frames if m.get("handoff_from")]
+    assert marked and marked[0]["handoff_from"]["device"] == "phone-1"
+    assert frames[-1].get("handoff_from") is None
+    assert not [m for m in frames if m.get("remote_from")]
+
+
+def test_a_busy_conversation_refuses_a_handed_off_round(hub_server) -> None:
+    """Contract C13, cross-device lock: while a round is already running in the conversation,
+    a new handoff is refused with ``busy`` — the word is never folded into the running turn."""
+    client, service, llm, relay = hub_server
+    sign_in(client)
+    wait_for(lambda: client.get("/api/hub").json()["state"] == "connected")
+    service.settings.sentinel.mode = "auto"
+    llm.script.append(LLMResponse(tool_calls=[tc("shell", command="sleep 20")]))
+    relay.call_runtime(
+        "task",
+        {"text": "take a while", "conversation": "c", "thread": "main", "handoff": True},
+        "a",
+    )
+    assert relay.next_frame("event")["body"]["stage"] == "tool"  # the run is under way
+    assert service.threads["main"].busy
+    # a second handoff on the same conversation is refused outright
+    llm.script.append(LLMResponse(content="should never run"))
+    relay.call_runtime(
+        "task", {"text": "again", "conversation": "c", "thread": "main", "handoff": True}, "b"
+    )
+    res = relay.next_frame("result")
+    assert res["id"] == "b" and res["ok"] is False and res["error"] == "busy"
+    # nothing was folded into the running turn
+    assert service.threads[MAIN_THREAD].inbox.empty()
+    client.post(f"/api/threads/{MAIN_THREAD}/stop")
+
+
+def test_streaming_frames_are_forwarded_to_the_caller(hub_server) -> None:
+    """Contract C13, stage three: the run's live text reaches the caller as its own stages
+    (``stream_start`` / ``delta`` / ``reasoning_delta`` / ``stream_end``), apart from the
+    whole-block ``text`` stage — a caller can tell a growing increment from a full block."""
+    client, service, llm, relay = hub_server
+    sign_in(client)
+    wait_for(lambda: client.get("/api/hub").json()["state"] == "connected")
+    service.settings.sentinel.mode = "auto"
+    service.ui.show_thinking = True  # reasoning deltas reach the bus only when thinking is shown
+    llm.script.append(LLMResponse(content="Hello there", reasoning="thinking hard"))
+    relay.call_runtime(
+        "task", {"text": "say hi", "conversation": "c", "thread": "main", "handoff": True}, "s1"
+    )
+    stages: list[dict[str, Any]] = []
+    while True:
+        frame = relay.next_frame("event")
+        if frame["id"] != "s1":
+            continue
+        stages.append(frame["body"])
+        if frame["body"]["stage"] == "stream_end":
+            break
+    kinds = [b["stage"] for b in stages]
+    assert "stream_start" in kinds and "delta" in kinds and "stream_end" in kinds
+    assert "reasoning_delta" in kinds  # thinking travels too
+    # the increments carry the stream id and are partial, so a caller appends rather than
+    # replacing; a whole-block text stage is separate and marked interim instead
+    delta = [b for b in stages if b["stage"] == "delta"][0]
+    assert delta["text"] == "Hello there" and delta["partial"] is True and delta["id"]
+    reasoning = [b for b in stages if b["stage"] == "reasoning_delta"][0]
+    assert reasoning["text"] == "thinking hard" and reasoning["partial"] is True
+    starts = [b for b in stages if b["stage"] == "stream_start"]
+    ends = [b for b in stages if b["stage"] == "stream_end"]
+    assert starts and ends and starts[0]["id"] == delta["id"] == ends[0]["id"]
+    # the final answer is still the `result` frame
+    assert relay.next_frame("result")["body"]["text"] == "Hello there"
+
+
+def test_forwarded_text_and_delta_stages_are_told_apart() -> None:
+    """The older ``stage:"text"`` (whole non-final blocks, ``interim:true``) stays as it was;
+    it is never confused with the new increment stages, which alone carry ``partial:true``."""
+    from nanomuse.hub.service import HubService
+
+    sent: list[dict[str, Any]] = []
+
+    class _Sink:
+        id = "x"
+        sender = {"id": "phone-1", "name": "Pixel"}
+        sender_id = "phone-1"
+        sender_name = "Pixel"
+
+        async def event(self, body: dict[str, Any]) -> None:
+            sent.append(body)
+
+    svc = object.__new__(HubService)
+    svc._relayed_approvals = {}
+    sink = _Sink()
+    asyncio.run(
+        HubService._forward_event(
+            svc, sink, {"type": "assistant", "text": "a growing message", "quiet": False}
+        )
+    )
+    assert sent == [{"stage": "text", "text": "a growing message", "interim": True}]
+    assert "partial" not in sent[0]
+    sent.clear()
+    asyncio.run(HubService._forward_stream(svc, sink, "delta", {"id": "a1", "text": "grow"}))
+    assert sent == [{"stage": "delta", "id": "a1", "text": "grow", "partial": True}]
 
 
 @pytest.mark.parametrize("finish", ["stop", "timeout"])
