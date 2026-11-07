@@ -239,4 +239,32 @@ class DeviceStripTest {
             DeviceStrip.focusIndex(devices, ""),
         )
     }
+
+    // ── the short label under a face ─────────────────────────────────────────────────
+
+    @Test
+    fun a_short_name_is_drawn_in_full() {
+        assertEquals("办公室电脑", DeviceStrip.displayName("办公室电脑"))
+        assertEquals("Mac mini", DeviceStrip.displayName("Mac mini"))
+    }
+
+    @Test
+    fun a_name_of_exactly_nine_characters_is_drawn_in_full() {
+        assertEquals("123456789", DeviceStrip.displayName("123456789"))
+    }
+
+    @Test
+    fun a_long_name_is_cut_to_nine_characters_and_an_ellipsis() {
+        assertEquals("d40b482eb…", DeviceStrip.displayName("d40b482ebaa1"))
+    }
+
+    @Test
+    fun an_empty_name_stays_empty() {
+        assertEquals("", DeviceStrip.displayName(""))
+    }
+
+    @Test
+    fun a_custom_limit_is_honoured() {
+        assertEquals("d40b…", DeviceStrip.displayName("d40b482ebaa1", limit = 4))
+    }
 }

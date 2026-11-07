@@ -131,6 +131,15 @@ object DeviceStrip {
         return body.substring(1)
     }
 
+    /**
+     * The short label a face wears under its disc on the device strip. A name longer than [limit]
+     * is cut to the first [limit] characters and a single ellipsis, so the label fits on one line
+     * and every disc stays on the same level. Only the strip draws this: the full name is still
+     * what the disc reads out as its content description and what the `@` picker matches against.
+     */
+    fun displayName(name: String, limit: Int = 9): String =
+        if (name.length <= limit) name else name.take(limit) + "…"
+
     private fun asComputer(d: Device) = Computers.Computer(
         id = "hub:" + d.id,
         name = d.name,

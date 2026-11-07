@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
 import io.github.nanomuse.reach.Computers
+import io.github.nanomuse.terminal.DeviceStrip
 
 /**
  * How wide one device's slot is, whatever its disc does: the strip is laid out on fixed slots so
@@ -237,10 +238,11 @@ fun nmDeviceFaces(
                     // name every other device of the account wears, so under its own disc that
                     // name says nothing. "This device" is what the person knows it by, and it is
                     // the word the console uses for the same disc.
-                    text = if (d.isThis) stringResource(R.string.nm_device_this) else d.name,
+                    text = if (d.isThis) stringResource(R.string.nm_device_this) else DeviceStrip.displayName(d.name),
                     fontSize = if (here) 10.sp else 9.sp,
                     lineHeight = 12.sp,
-                    maxLines = 2,
+                    // One line keeps every slot the same height, so the discs stay on one level.
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                     color = if (here) MaterialTheme.colorScheme.onSurface
