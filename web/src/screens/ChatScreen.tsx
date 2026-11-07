@@ -17,7 +17,8 @@ import { stripNamingFence } from "../fences";
 import { localDetail, localLabel, useLocale, useT } from "../i18n";
 import { mentionSuggestions, mentionTarget } from "../mention";
 import { WORKING_TTL_MS } from "../presence";
-import { useStore, type Stream } from "../store";
+import { useStore } from "../store";
+import { streamsForThread, type Stream } from "../streams";
 import type { AttachmentInfo, HubDevice, SkillInfo, ThreadMeta, TimelineEvent, UserEvent, WorkingPresence } from "../types";
 import { cx, timeDivider, timeShort } from "../util";
 import { MuseSheet } from "./MuseSheet";
@@ -33,7 +34,12 @@ export function ChatScreen() {
   const loaded = state.events[activeThread];
   const events = useMemo(() => loaded ?? [], [loaded]);
   const eventsLoaded = loaded !== undefined;
-  const stream = state.streams[activeThread];
+  // Replies being written right now in this conversation, one per run (contract C13): two
+  // streams (one here, one handed to another device) no longer overwrite each other.
+  const liveStreams = useMemo(() => streamsForThread(state.streams, activeThread), [state.streams, activeThread]);
+  // the one the screen speaks for (a screen reader hears the run still writing, else the last)
+  const stream = useMemo(() => liveStreams.find((s) => !s.ended) ?? liveStreams[0], [liveStreams]);
+  const streamingNow = liveStreams.some((s) => s.text || s.reasoning);
   const thread = threads.find((t) => t.id === activeThread);
   const [activityOpen, setActivityOpen] = useState(false);
   // the browser card being watched (or driven) full-screen
@@ -43,6 +49,13 @@ export function ChatScreen() {
   const deviceOnline = thread?.device ? (state.hub?.devices.find((d) => d.id === thread.device)?.online ?? null) : null;
   // another device of the account is working on this chat (C9): the quiet line under its message
   const working = useLiveWorking(state.working[activeThread]);
+  // The device that runs this conversation (contract C13): the thread's owner, named from the
+  // runtime or looked up on the hub; empty when the runtime reports none (nothing then shows).
+  const owner = useMemo(() => {
+    const id = thread?.owner_device;
+    if (!id) return "";
+    return thread?.owner_device_name || state.hub?.devices.find((d) => d.id === id)?.name || id;
+  }, [thread?.owner_device, thread?.owner_device_name, state.hub?.devices]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -298,7 +311,7 @@ export function ChatScreen() {
           )}
           {/* The first conversation's opening, where the history begins: the app speaks first */}
           {bound && eventsLoaded && !state.hasMore[activeThread] && intro && <IntroLines lines={intro.lines} />}
-          {eventsLoaded && events.length === 0 && !stream && !bound && (
+          {eventsLoaded && events.length === 0 && liveStreams.length === 0 && !bound && (
             <EmptyChat
               name={name}
               device={thread?.device ? thread.device_name || thread.device : undefined}
@@ -322,17 +335,13 @@ export function ChatScreen() {
               newestReplyId={newestReplyId}
             />
           ))}
-          {stream && (stream.text || stream.reasoning) && (
-            <AssistantBubble
-              text={stream.text}
-              reasoning={stream.reasoning}
-              streaming
-              files={files}
-              onOpenFile={openFile}
-            />
+          {liveStreams.map((s) =>
+            s.text || s.reasoning ? (
+              <AssistantBubble key={s.id} text={s.text} reasoning={s.reasoning} streaming files={files} onOpenFile={openFile} />
+            ) : null,
           )}
           <LiveReply stream={stream} name={name} />
-          {(thread?.busy || status.state !== "idle") && !(stream?.text || stream?.reasoning) && status.state !== "waiting" && (
+          {(thread?.busy || status.state !== "idle") && !streamingNow && status.state !== "waiting" && (
             <TypingIndicator label={thread?.queued ? t("{n} queued", { n: thread.queued }) : undefined} />
           )}
           {/* the chooser for the agent's name, under the latest reply, until a pick or a typed name */}
@@ -360,6 +369,13 @@ export function ChatScreen() {
       </div>
 
       <AllowanceHeadsUp />
+      {/* Which device runs this conversation (contract C13): a turn written here is handed to it.
+          Absent on a runtime that does not report an owner yet, and then nothing shows. */}
+      {owner && (
+        <div className="flex items-center gap-1.5 px-5 pb-1 pt-0.5 text-[12px] text-muted">
+          <MonitorSmartphone size={12} /> {t("Run by {device}", { device: owner })}
+        </div>
+      )}
       <Composer
         name={name}
         busy={!!thread?.busy && pendingApprovals === 0}

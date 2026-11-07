@@ -1201,6 +1201,7 @@ const zhCN: Record<string, string> = {
   "on {device}": "在 {device} 上",
   "from {device}": "来自 {device}",
   "asked from {device}": "从 {device} 发来",
+  "Run by {device}": "由 {device} 执行",
   "{name} on {device} wants to": "{device} 上的 {name} 想要",
   // ---- this computer's hands
   "Hands on this computer": "操作这台电脑",

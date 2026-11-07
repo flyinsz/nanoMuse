@@ -12,6 +12,7 @@ import { api, AuthError, connectWs, getToken } from "./api";
 import { getLocale, t } from "./i18n";
 import { liveWorking } from "./presence";
 import { registerWorker, setAppBadge } from "./push";
+import { appendReasoning, appendText, dropEndedStreams, dropStreamById, endStream, startStream, type StreamBuckets } from "./streams";
 import { useTheme } from "./theme";
 import { readStorage, writeStorage } from "./util";
 import type {
@@ -93,13 +94,8 @@ function writeThreadSeen(map: Record<string, string>): void {
 /** The browser stepped past the sign-in door for a key of its own. */
 const SIGN_IN_SKIPPED_KEY = "nanomuse_sign_in_skipped";
 
-export interface Stream {
-  id: string;
-  text: string;
-  /** live reasoning, streamed this turn only; the final event carries the fold */
-  reasoning: string;
-  ended: boolean;
-}
+/** A reply being written right now, keyed by conversation and round (see src/streams.ts). */
+export type { Stream } from "./streams";
 
 export interface AppState {
   connected: boolean;
@@ -115,7 +111,8 @@ export interface AppState {
   activeThread: string;
   events: Record<string, TimelineEvent[]>;
   hasMore: Record<string, boolean>;
-  streams: Record<string, Stream | undefined>;
+  /** Replies being written right now, keyed by conversation and round (contract C13). */
+  streams: StreamBuckets;
   goals: Goal[];
   settings: SettingsView | null;
   goalsVersion: number;
@@ -431,9 +428,8 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
     case "event":
     case "update": {
       const ev = normalizeEvent(msg.event);
-      const streams = { ...state.streams };
-      const stream = streams[ev.thread];
-      if (ev.type === "assistant" && stream && stream.id === ev.id) streams[ev.thread] = undefined;
+      // the reply a stream was filling has landed: that stream's bucket goes (C13)
+      const streams = ev.type === "assistant" ? dropStreamById(state.streams, ev.thread, ev.id) : state.streams;
       const threads = state.threads.map((t) =>
         t.id === ev.thread && msg.kind === "event" ? { ...t, updated_at: ev.ts } : t,
       );
@@ -460,39 +456,17 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
       };
     }
     case "stream_start":
-      return {
-        ...state,
-        streams: { ...state.streams, [msg.thread]: { id: msg.id, text: "", reasoning: "", ended: false } },
-      };
-    case "delta": {
-      const current = state.streams[msg.thread];
-      const stream: Stream =
-        current && current.id === msg.id
-          ? { ...current, text: current.text + msg.text }
-          : { id: msg.id, text: msg.text, reasoning: "", ended: false };
-      return { ...state, streams: { ...state.streams, [msg.thread]: stream } };
-    }
-    case "reasoning_delta": {
-      const current = state.streams[msg.thread];
-      const stream: Stream =
-        current && current.id === msg.id
-          ? { ...current, reasoning: current.reasoning + msg.text }
-          : { id: msg.id, text: "", reasoning: msg.text, ended: false };
-      return { ...state, streams: { ...state.streams, [msg.thread]: stream } };
-    }
-    case "stream_end": {
-      const current = state.streams[msg.thread];
-      if (!current || current.id !== msg.id) return state;
-      // Keep it until the persisted assistant event replaces it (avoids flicker);
-      // an empty stream, or one the server says was not a reply, can go right away.
-      if (msg.discard || !current.text.trim()) return { ...state, streams: { ...state.streams, [msg.thread]: undefined } };
-      return { ...state, streams: { ...state.streams, [msg.thread]: { ...current, ended: true } } };
-    }
+      return { ...state, streams: startStream(state.streams, msg.thread, msg.id, msg.round) };
+    case "delta":
+      return { ...state, streams: appendText(state.streams, msg.thread, msg.id, msg.text, msg.round) };
+    case "reasoning_delta":
+      return { ...state, streams: appendReasoning(state.streams, msg.thread, msg.id, msg.text, msg.round) };
+    case "stream_end":
+      return { ...state, streams: endStream(state.streams, msg.thread, msg.id, msg.discard, msg.round) };
     case "status": {
       const st = msg.status;
-      const streams = { ...state.streams };
-      const s = streams[st.thread];
-      if (s?.ended && st.state !== "working") streams[st.thread] = undefined;
+      // the run ended: any finished stream of that conversation goes (the reply has landed)
+      const streams = st.state === "working" ? state.streams : dropEndedStreams(state.streams, st.thread);
       const overall = pickOverall(state.status, st);
       const finished = state.status.state === "working" && overall.state === "idle";
       return { ...state, status: overall, streams, finishedAt: finished ? Date.now() : state.finishedAt };

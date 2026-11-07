@@ -294,6 +294,12 @@ export interface ThreadMeta {
   /** a synced chat that was started on another device of the account ("From Pixel 8") */
   origin_device?: string;
   origin_device_name?: string;
+  /**
+   * The device that owns this conversation (contract C13): a turn started here is handed to it
+   * and it runs on its own full context. A device id; absent on a runtime that does not have it yet.
+   */
+  owner_device?: string;
+  owner_device_name?: string;
 }
 
 /** GET /api/sync/state: conversations synced between the account's devices (contract C7). */
@@ -1451,10 +1457,10 @@ export type WsMessage =
   | { kind: "hello"; state: StateSnapshot }
   | { kind: "event"; event: TimelineEvent }
   | { kind: "update"; event: TimelineEvent }
-  | { kind: "stream_start"; thread: string; id: string; ts: string }
-  | { kind: "delta"; thread: string; id: string; text: string }
-  | { kind: "reasoning_delta"; thread: string; id: string; text: string }
-  | { kind: "stream_end"; thread: string; id: string; discard?: boolean }
+  | { kind: "stream_start"; thread: string; id: string; ts: string; round?: string }
+  | { kind: "delta"; thread: string; id: string; text: string; round?: string }
+  | { kind: "reasoning_delta"; thread: string; id: string; text: string; round?: string }
+  | { kind: "stream_end"; thread: string; id: string; discard?: boolean; round?: string }
   | { kind: "status"; status: Status }
   | { kind: "thread"; thread: ThreadMeta }
   | { kind: "thread_deleted"; thread: string }
