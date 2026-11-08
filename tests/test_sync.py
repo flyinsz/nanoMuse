@@ -1631,3 +1631,58 @@ def test_a_failed_step_is_marked_as_one(main_only) -> None:
     )
     wait_for(lambda: relay.stream_calls)
     assert relay.stream_calls[0]["tool"]["ok"] is False
+
+
+def test_one_turn_is_one_round_however_many_times_it_speaks(main_only) -> None:
+    """C13 §4: a turn's words, its steps and its reasoning belong in one bubble. A turn speaks
+    more than once — a tool call, its answer, then prose — and each of those closes its own
+    message with `stream_end`. The round is the *turn*, not the message: keying it to the
+    message left the steps in a bubble of their own, so the other devices saw an answer with
+    no sign of what ran it."""
+    client, service, llm, relay = main_only
+    llm.replies = [LLMResponse(content="ok", finish_reason="stop")]
+    client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "go"})
+    wait_for(lambda: service.sync.cid_of(MAIN_THREAD) is not None)
+    relay.stream_calls.clear()
+    thread = service.threads[MAIN_THREAD]
+
+    def bus(kind: str, **msg: Any) -> None:
+        client.portal.call(service.sync.stream_frame, kind, {"kind": kind, **msg})  # type: ignore[union-attr]
+
+    # one turn: a step, the words that follow it, and the message's own end in between
+    client.portal.call(service.sync.message_sent, thread)  # type: ignore[union-attr]
+    bus("delta", thread=MAIN_THREAD, text="let me look")
+    bus("stream_end", thread=MAIN_THREAD)
+    bus(
+        "event",
+        event={
+            "type": "tool",
+            "tool": "shell",
+            "thread": MAIN_THREAD,
+            "status": "running",
+            "title": "list files",
+        },
+    )
+    bus(
+        "update",
+        event={
+            "type": "tool",
+            "tool": "shell",
+            "thread": MAIN_THREAD,
+            "status": "ok",
+            "output": "a.txt",
+        },
+    )
+    bus("delta", thread=MAIN_THREAD, text=" here you are")
+    bus("stream_end", thread=MAIN_THREAD)
+    client.portal.call(service.sync.turn_finished, thread)  # type: ignore[union-attr]
+    wait_for(lambda: any(c.get("done") for c in relay.stream_calls))
+
+    rounds = {c["round"] for c in relay.stream_calls}
+    assert len(rounds) == 1, f"one turn must be one round, got {rounds}"
+    assert sum(1 for c in relay.stream_calls if c.get("done")) == 1
+    steps = [c["tool"] for c in relay.stream_calls if c.get("tool")]
+    assert [s["stage"] for s in steps] == ["call", "result"]
+    assert (
+        "".join(str(c.get("delta") or "") for c in relay.stream_calls) == "let me look here you are"
+    )

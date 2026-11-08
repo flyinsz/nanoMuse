@@ -193,6 +193,9 @@ class ConversationSync:
         # accumulating buffer per conversation (a run makes its own round id), flushed on a
         # timer: {thread id: {cid, round, delta, reasoning, tool, seq}}.
         self._streams: dict[str, dict[str, Any]] = {}
+        # the round a conversation's turn is running under: one bubble per turn, kept for the
+        # whole turn so its words, its reasoning and its steps land in the same one
+        self._stream_rounds: dict[str, str] = {}
         # conversations whose buffered batch is already waiting out its interval
         self._flushing: set[str] = set()
         # presence (C9): cid → {thread, device, device_name, state, detail, at} for the other
@@ -393,6 +396,7 @@ class ConversationSync:
             # a batch still buffered belongs to the account that just signed out: dropping it
             # is right (its conversation is another account's now), and nothing sends it
             self._streams.clear()
+            self._stream_rounds.clear()
             self._flushing.clear()
             self._save()
             self._rehome_main(previous, account_id)
@@ -534,15 +538,26 @@ class ConversationSync:
     # ------------------------------------------------------------------ hooks from the service
     def message_sent(self, thread: Thread) -> None:
         """The person's message is on the timeline: it goes up now (C8, real time), not
-        when the turn ends — and right after it, ``working: true`` (C9)."""
+        when the turn ends — and right after it, ``working: true`` (C9).
+
+        The turn's own round opens here (C13 §4). A turn is what a round is: the words, the
+        steps and the reasoning of one answer belong in one bubble, and a turn may speak more
+        than once (a tool call, its answer, then prose), so the round lasts until
+        :meth:`turn_finished` rather than until the next message.
+        """
         if self.active and self._eligible(thread):
             self.push_soon(delay=0.0)
             self._working_soon(thread, True)
+            self._streams.pop(thread.id, None)
+            self._stream_rounds.pop(thread.id, None)
 
     def turn_finished(self, thread: Thread) -> None:
         if self.active and self._eligible(thread):
             self.push_soon(delay=PUSH_DELAY_S)
             self._working_soon(thread, False)
+            # the turn is over: the last batch goes, then the frame that closes the round, so
+            # the other devices' bubbles settle rather than waiting out their own timeout
+            self._flush_stream(thread.id)
 
     def _working_soon(self, thread: Thread, working: bool) -> None:
         """Presence to the relay once the push it belongs to is through — so the
@@ -699,9 +714,13 @@ class ConversationSync:
         if thread is None or not self._eligible(thread):
             return
         if kind == "stream_start":
-            return  # the round opens on its first piece; it has no frame of its own
+            return  # the turn's round opens on its first piece; it has no frame of its own
         if kind == "stream_end":
-            self._flush_stream(thread_id)
+            # One answer of the turn is written out. That is not the end of the *round* (C13 §4):
+            # a turn speaks more than once — a tool call, its answer, then prose — and all of it
+            # belongs in one bubble. Only the batch is sent here; the round closes in
+            # ``turn_finished``.
+            self._send_buffer(self._streams.get(thread_id))
             return
         cid = self.cid_of(thread.id)
         if not cid:
@@ -709,17 +728,7 @@ class ConversationSync:
         text = str(msg.get("text") or "")
         if not text and kind != "tool_delta":
             return
-        buf = self._streams.get(thread_id)
-        if buf is None:
-            buf = {
-                "cid": cid,
-                "round": new_cid(),
-                "delta": "",
-                "reasoning": "",
-                "tool": None,
-                "seq": 0,
-            }
-            self._streams[thread_id] = buf
+        buf = self._buffer_for(thread_id, cid)
         if kind == "delta":
             buf["delta"] = (str(buf["delta"]) + text)[-8192:]
         elif kind == "reasoning_delta":
@@ -735,6 +744,30 @@ class ConversationSync:
                 "ok": tool.get("ok") is not False,
             }
         self._stream_flush_soon(thread_id)
+
+    def _buffer_for(self, thread_id: str, cid: str) -> dict[str, Any]:
+        """The turn's accumulating buffer, made once per turn.
+
+        The round id lives on the mapping rather than on the buffer, so a buffer emptied by a
+        batch keeps naming the same round: every piece of one turn — its words, its reasoning,
+        its steps — lands in the bubble the other devices already opened for it.
+        """
+        buf = self._streams.get(thread_id)
+        if buf is None:
+            round_id = self._stream_rounds.get(thread_id)
+            if round_id is None:
+                round_id = new_cid()
+                self._stream_rounds[thread_id] = round_id
+            buf = {
+                "cid": cid,
+                "round": round_id,
+                "delta": "",
+                "reasoning": "",
+                "tool": None,
+                "seq": 0,
+            }
+            self._streams[thread_id] = buf
+        return buf
 
     def _stream_step(self, step: dict[str, Any]) -> None:
         """A tool card of this device's own run, sent at once rather than batched: a step is
@@ -753,17 +786,7 @@ class ConversationSync:
         cid = self.cid_of(thread.id)
         if not cid:
             return
-        buf = self._streams.get(thread_id)
-        if buf is None:
-            buf = {
-                "cid": cid,
-                "round": new_cid(),
-                "delta": "",
-                "reasoning": "",
-                "tool": None,
-                "seq": 0,
-            }
-            self._streams[thread_id] = buf
+        buf = self._buffer_for(thread_id, cid)
         # anything already written goes first, so the step is not overtaken by the words after it
         if buf.get("delta") or buf.get("reasoning"):
             self._send_buffer(buf)
@@ -800,13 +823,23 @@ class ConversationSync:
             self._flushing.discard(thread_id)
 
     def _flush_stream(self, thread_id: str) -> None:
-        """The run of ``thread_id`` is over: the last batch goes, then the frame that closes
-        the round, so the other devices' bubbles settle rather than waiting for a timeout."""
+        """The turn of ``thread_id`` is over: the last batch goes, then the frame that closes the
+        turn's round, so the other devices' bubbles settle rather than waiting out a timeout.
+
+        The round is named even when nothing is buffered: a turn whose pieces were all sent
+        already still has a bubble on screen, and it has to be told the turn is over.
+        """
         buf = self._streams.pop(thread_id, None)
-        if buf is None:
+        round_id = self._stream_rounds.pop(thread_id, None)
+        if buf is None and round_id is None:
             return
-        self._send_buffer(buf)
-        self._post_stream(str(buf["cid"]), str(buf["round"]), int(buf["seq"]) + 1, done=True)
+        cid = str((buf or {}).get("cid") or self.cid_of(thread_id) or "")
+        if buf is not None:
+            self._send_buffer(buf)
+        if not cid:
+            return
+        seq = int((buf or {}).get("seq") or 0) + 1
+        self._post_stream(cid, str((buf or {}).get("round") or round_id), seq, done=True)
 
     def _send_buffer(self, buf: dict[str, Any] | None) -> None:
         """Send what the buffer holds; anything that arrived meanwhile stays for the next
