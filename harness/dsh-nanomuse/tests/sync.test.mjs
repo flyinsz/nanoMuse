@@ -29,8 +29,10 @@ function fakeRelay() {
   const next = () => ++r.seq
   const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
   const state = () => ({ enabled: r.enabled, cursor: r.seq, counts: { conversations: [...r.convs.values()].filter((c) => !c.deleted).length, messages: r.msgs.size }, limits: {}, working: [...r.presence.values()] })
-  r.add = (cid, kind, title, device = 'phone-1', name = 'Pixel 8') => {
-    r.convs.set(cid, { cid, kind, title, device, device_name: name, created_at: 1738000000, updated_at: 1738000000, deleted: false, seq: next() })
+  r.add = (cid, kind, title, device = 'phone-1', name = 'Pixel 8', owner = '') => {
+    // C13 (impl §A): the relay keeps what the client said, else falls back to the creator, and an
+    // empty owner never clears a real one — the same rules the real relay keeps.
+    r.convs.set(cid, { cid, kind, title, device, device_name: name, created_at: 1738000000, updated_at: 1738000000, deleted: false, owner_device: owner || device, seq: next() })
   }
   r.say = (cid, role, text, device = 'phone-1', name = 'Pixel 8', at = 1738000050) => {
     const mid = `m-${r.seq + 1}`
@@ -106,11 +108,17 @@ function fakeRelay() {
             const main = [...r.convs.values()].find((x) => x.kind === 'main' && !x.deleted)
             if (main) { redirected.set(c.cid, main.cid); rejected.push({ cid: c.cid, reason: 'main_exists', cid_main: main.cid }); continue }
           }
-          r.convs.set(c.cid, { cid: c.cid, kind: c.kind ?? 'side', title: c.title ?? '', device: body.device, device_name: 'Desk', created_at: c.created_at ?? 0, updated_at: c.updated_at ?? 0, deleted: false, seq: next() })
+          r.convs.set(c.cid, { cid: c.cid, kind: c.kind ?? 'side', title: c.title ?? '', device: body.device, device_name: 'Desk', created_at: c.created_at ?? 0, updated_at: c.updated_at ?? 0, deleted: false, owner_device: c.owner_device || body.device, seq: next() })
           accepted++
-        } else if (c.title !== r.convs.get(c.cid).title) {
-          Object.assign(r.convs.get(c.cid), { title: c.title, seq: next() })
-          accepted++
+        } else {
+          const held = r.convs.get(c.cid)
+          // C13: a push that names an owner sets it; one that names none leaves the row's owner
+          // alone (impl §A). A title or an owner that moved is what makes the relay rewrite.
+          const newOwner = c.owner_device || held.owner_device || ''
+          if (c.title !== held.title || newOwner !== held.owner_device) {
+            Object.assign(held, { title: c.title, owner_device: newOwner, seq: next() })
+            accepted++
+          }
         }
       }
       for (const m of body.messages ?? []) {
@@ -224,6 +232,36 @@ test('the person’s words go up when sent, the model’s at the turn’s end; t
   sessions.rows.get('s-main').title = 'Greetings'
   e.sessionRenamed('s-main')
   await until(() => relay.convs.get(main.cid).title === 'Greetings')
+  e.stop()
+})
+
+test('a rename does not claim the conversation, and a turn here does — the owner is not whoever pushes last', async () => {
+  // C13 (impl §A) / docs/session-handoff.md §2: an owner is a fact about the conversation, moved
+  // by `@` and by nothing else. A push that carries no turn of its own says nothing about who
+  // holds the context, so it must not name one. Measured: an always-on runtime syncs around the
+  // clock, so "the last device to push" quietly became the owner of every chat, and every device
+  // read that device as where its sentences should go.
+  const relay = fakeRelay()
+  // a chat this computer already has, handed to it by the relay as one of its own
+  const sessions = fakeSessions()
+  sessions.add('s-side', 'Dinner plans', [])
+  const { engine: e } = engine(relay, sessions, { state: { ...emptyState(), sideChats: true, cids: { 's-side': 'c1' } } })
+  relay.add('c1', 'side', 'Dinner plans', 'pc-1', 'Desk', 'phone-1')
+  await e.pull()
+  const sid = 's-side'
+  // a rename here, with no turn of ours in the chat: the owner stands
+  sessions.rows.get(sid).title = 'Dinner in Kyoto'
+  e.sessionRenamed(sid)
+  await until(() => relay.convs.get('c1').title === 'Dinner in Kyoto')
+  const renamed = relay.pushes.at(-1).conversations.find((c) => c.cid === 'c1')
+  assert.equal(renamed.owner_device, undefined, 'a rename must not claim the chat')
+  assert.equal(relay.convs.get('c1').owner_device, 'phone-1')
+  // now a turn really runs here: the answer is the profile of holding it, and the owner follows
+  sessions.lines.get(sid).push({ id: 'u2', role: 'user', text: 'make it 8', at: 1738000070000 })
+  sessions.lines.get(sid).push({ id: 'a2', role: 'assistant', text: 'Changed to 8', at: 1738000071000 })
+  e.turnEnded(sid)
+  await until(() => [...relay.msgs.values()].some((m) => m.text === 'Changed to 8'))
+  assert.equal(relay.convs.get('c1').owner_device, 'pc-1')
   e.stop()
 })
 

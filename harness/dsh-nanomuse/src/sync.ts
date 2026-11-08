@@ -1210,15 +1210,31 @@ export class SyncEngine {
         if (!info || !this.syncs(sessionId)) continue
         const cid = this.cidFor(sessionId)
         const title = info.title || 'New chat'
-        // C13 (impl §A): a chat this device pushes is one whose context it holds, so it goes up
-        // as the owner. The relay keeps the first word it heard and never lets an empty one clear
-        // a real owner, so a chat that belongs elsewhere is not taken away by a later push from
-        // here. Only a rename carries it, which is the same round that already speaks about the
-        // conversation — nothing is sent on its own account.
-        if (this.state.titles[sessionId] !== title) {
-          conversations.push({ cid, kind: sessionId === this.state.mainSession ? 'main' : 'side', title, created_at: Math.floor(info.createdAt / 1000), updated_at: Math.floor(info.updatedAt / 1000), owner_device: device })
-        }
         const lines = await this.options.sessions.lines(sessionId)
+        // C13 (impl §A): this computer holds a conversation's context when it ran a turn of it —
+        // the answer going up is the profile of that. Asking is not holding: a sentence handed to
+        // another device still writes its own `user` line here (impl §5, one `mid`), so a question
+        // typed here must never claim a chat the other device is the one running. Nor does a
+        // rename claim anything: the NAS runtime syncs around the clock, so "last to push" would
+        // quietly make it the owner of chats it never ran (measured: it held a main chat whose own
+        // creator was this computer). Only `@` moves an owner besides this
+        // (`docs/session-handoff.md` §2: ownership is a fact about the conversation, not about
+        // where the last frame came from).
+        const ranTurn = lines.some(
+          (line) => line.role === 'assistant' && !this.state.mids[lineKey(sessionId, line.id)] && !this.state.mids[line.id],
+        )
+        if (this.state.titles[sessionId] !== title || ranTurn) {
+          conversations.push({
+            cid,
+            kind: sessionId === this.state.mainSession ? 'main' : 'side',
+            title,
+            created_at: Math.floor(info.createdAt / 1000),
+            updated_at: Math.floor(info.updatedAt / 1000),
+            // absent when this push carries no turn of ours: the relay keeps the owner it holds,
+            // and a row nobody has claimed falls back to its creator (impl §A)
+            ...(ranTurn ? { owner_device: device } : {}),
+          })
+        }
         for (const line of lines) {
           if (this.state.mids[lineKey(sessionId, line.id)] || this.state.mids[line.id]) continue
           if (messages.length >= batch) {
