@@ -13,6 +13,7 @@
  * The rules are in `stream-view.ts` (pure, and checked there); this file only places nodes.
  */
 import { peekLive, subscribeLive, type Live, type LiveStream } from './live.ts'
+import { mdToHtml } from './markdown-io.ts'
 import { streamBubbles, toolLine } from './stream-view.ts'
 import type { Translate } from './api.ts'
 
@@ -50,7 +51,9 @@ function bubble(t: Translate, stream: LiveStream, deviceName: string): HTMLEleme
   root.setAttribute(KEY, `${stream.cid}\u0000${stream.round}`)
   root.setAttribute(CID, stream.cid)
   root.setAttribute(ROUND, stream.round)
-  root.append(el('div', 'nm-stream-body', stream.text))
+  // `nm-md` is the harness's own Markdown shape (the rooms' bodies wear it too), so a growing
+  // answer's paragraphs, lists and code fences sit the way they do anywhere else here.
+  root.append(el('div', 'nm-stream-body nm-md', stream.text))
   return root
 }
 
@@ -65,7 +68,16 @@ function paint(root: HTMLElement, stream: LiveStream, t: Translate): void {
     if (reasoning) reasoning.textContent = stream.reasoning
     else body?.insertAdjacentElement('beforebegin', el('div', 'nm-stream-reasoning', stream.reasoning))
   } else reasoning?.remove()
-  if (body && body.textContent !== stream.text) body.textContent = stream.text
+  // The words are Markdown, as the harness renders a reply: drawn with the same renderer the rooms
+  // use, so a code fence, a list and bold text arrive looking like the answer they are about to
+  // become rather than as the punctuation marking them up. Redrawn only when the text moved.
+  if (body) {
+    const html = mdToHtml(stream.text)
+    if (body.getAttribute('data-nm-stream-html') !== html) {
+      body.innerHTML = html
+      body.setAttribute('data-nm-stream-html', html)
+    }
+  }
   // The steps, in the order they were reported: each row is the tool's own name and what it found.
   const rows = stream.tools.map((tool) => ({ line: toolLine(tool), bad: tool.stage === 'result' && !tool.ok }))
   const steps = root.querySelector<HTMLElement>('.nm-stream-steps') ?? el('div', 'nm-stream-steps')

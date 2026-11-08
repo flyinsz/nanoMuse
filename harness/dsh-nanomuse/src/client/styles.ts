@@ -1494,7 +1494,8 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
 .nm-stream { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; align-items: flex-start; }
 /* the round is on: the same slow breathing light as every other "something is going on" here */
 .nm-stream-live { width: 6px; height: 6px; border-radius: 50%; background: var(--nm-accent); flex: none; margin: 0 0 2px 2px; animation: nm-breathe-light 4.8s ease-in-out infinite; }
-.nm-stream-body { max-width: 100%; box-sizing: border-box; font-size: var(--dsh-content-font-size, 14px); line-height: calc(22px + var(--dsh-content-font-delta, 0px)); white-space: pre-wrap; word-break: break-word; color: var(--dsw-alias-label-primary); }
+.nm-stream-body { max-width: 100%; box-sizing: border-box; white-space: normal; word-break: break-word; color: var(--dsw-alias-label-primary); }
+/* the Markdown inside it is the harness's own shape; only the outer box is this bubble's */
 /* nothing written yet: the bubble is a plate, not an empty pill */
 .nm-stream-body:empty { display: none; }
 .nm-stream-reasoning { max-width: 100%; box-sizing: border-box; padding: 6px 12px; border-radius: 12px; border-left: 2px solid var(--nm-divider, var(--dsw-alias-border-l2)); background: var(--dsw-alias-bg-layer-2); font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); white-space: pre-wrap; word-break: break-word; }
