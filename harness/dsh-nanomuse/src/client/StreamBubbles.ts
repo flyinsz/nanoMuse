@@ -51,9 +51,9 @@ function bubble(t: Translate, stream: LiveStream, deviceName: string): HTMLEleme
   root.setAttribute(KEY, `${stream.cid}\u0000${stream.round}`)
   root.setAttribute(CID, stream.cid)
   root.setAttribute(ROUND, stream.round)
-  // `nm-md` is the harness's own Markdown shape (the rooms' bodies wear it too), so a growing
-  // answer's paragraphs, lists and code fences sit the way they do anywhere else here.
-  root.append(el('div', 'nm-stream-body nm-md', stream.text))
+  // The blocks are built by `paint`: prose and steps in the order the turn wrote them, each run of
+  // prose wearing `nm-md`, the harness's own Markdown shape (the rooms' bodies wear it too).
+  root.append(el('div', 'nm-stream-flow'))
   return root
 }
 
@@ -68,31 +68,55 @@ function paint(root: HTMLElement, stream: LiveStream, t: Translate): void {
     if (reasoning) reasoning.textContent = stream.reasoning
     else body?.insertAdjacentElement('beforebegin', el('div', 'nm-stream-reasoning', stream.reasoning))
   } else reasoning?.remove()
-  // The words are Markdown, as the harness renders a reply: drawn with the same renderer the rooms
-  // use, so a code fence, a list and bold text arrive looking like the answer they are about to
-  // become rather than as the punctuation marking them up. Redrawn only when the text moved.
-  if (body) {
-    const html = mdToHtml(stream.text)
-    if (body.getAttribute('data-nm-stream-html') !== html) {
-      body.innerHTML = html
-      body.setAttribute('data-nm-stream-html', html)
-    }
+  // The turn in the order it happened: its prose, then each step where the prose stood when the
+  // step arrived, then the prose after it. A turn reads, calls a tool, says what it found and
+  // calls another, so a bubble that put every step after every paragraph would say the opposite
+  // of what happened. Built as a run of blocks and swapped whole; the signature is what the
+  // blocks would say, so a batch that changed nothing costs no DOM work.
+  const blocks = turnBlocks(stream)
+  const signature = blocks.map((b) => (b.kind === 'step' ? `s${b.bad ? '!' : ''}${b.line}` : `t${b.md.length}`)).join('\u0000')
+  const flow = root.querySelector<HTMLElement>('.nm-stream-flow') ?? el('div', 'nm-stream-flow')
+  if (flow.getAttribute('data-nm-stream-flow') !== signature) {
+    flow.replaceChildren(
+      ...blocks.map((b) => {
+        if (b.kind === 'step') return el('div', b.bad ? 'nm-stream-step nm-stream-step-bad' : 'nm-stream-step', b.line)
+        const md = el('div', 'nm-stream-body nm-md')
+        md.innerHTML = mdToHtml(b.md)
+        return md
+      }),
+    )
+    flow.setAttribute('data-nm-stream-flow', signature)
   }
-  // The steps, in the order they were reported: each row is the tool's own name and what it found.
-  const rows = stream.tools.map((tool) => ({ line: toolLine(tool), bad: tool.stage === 'result' && !tool.ok }))
-  const steps = root.querySelector<HTMLElement>('.nm-stream-steps') ?? el('div', 'nm-stream-steps')
-  // Rebuilt only when the list moved, so a batch that brought only words leaves the rows alone.
-  const signature = rows.map((r) => `${r.bad ? '!' : ''}${r.line}`).join('\n')
-  if (steps.getAttribute('data-nm-stream-steps') !== signature) {
-    steps.replaceChildren(...rows.map((r) => el('div', r.bad ? 'nm-stream-step nm-stream-step-bad' : 'nm-stream-step', r.line)))
-    steps.setAttribute('data-nm-stream-steps', signature)
-  }
-  if (rows.length === 0) steps.remove()
-  else if (!steps.parentElement) root.append(steps)
+  if (!flow.parentElement) root.append(flow)
   // The breathing light while the run goes; a finished round keeps its bubble but stops glowing.
   const light = root.querySelector<HTMLElement>('.nm-stream-live')
   if (stream.done) light?.remove()
   else if (!light) root.insertBefore(el('span', 'nm-stream-live'), root.firstChild)
+}
+
+/** One block of a turn, in the order it happened: a run of prose, or one step. */
+type TurnBlock = { kind: 'text'; md: string } | { kind: 'step'; line: string; bad: boolean }
+
+/**
+ * A turn's prose and its steps, interleaved the way they happened. Each step carries how much
+ * text had been written when it arrived (`textAt`), so cutting the text at those marks puts
+ * every step back where it belongs. A step whose mark falls past the end of the text (the words
+ * for it have not arrived yet) is left for the end, where it will read once they do.
+ */
+export function turnBlocks(stream: LiveStream, t?: Translate): TurnBlock[] {
+  const text = stream.text
+  const steps = stream.tools
+    .map((tool) => ({ at: Math.max(0, Math.min(tool.textAt, text.length)), line: toolLine(tool), bad: tool.stage === 'result' && !tool.ok }))
+    .sort((a, b) => a.at - b.at)
+  const out: TurnBlock[] = []
+  let cursor = 0
+  for (const step of steps) {
+    if (step.at > cursor) out.push({ kind: 'text', md: text.slice(cursor, step.at) })
+    out.push({ kind: 'step', line: step.line, bad: step.bad })
+    cursor = Math.max(cursor, step.at)
+  }
+  if (cursor < text.length) out.push({ kind: 'text', md: text.slice(cursor) })
+  return out.filter((b) => b.kind === 'step' || b.md.trim() !== '')
 }
 
 /** Watch the document for running turns and draw them; returns the stop function. */

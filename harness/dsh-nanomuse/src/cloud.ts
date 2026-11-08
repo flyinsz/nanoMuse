@@ -2722,7 +2722,7 @@ export default class NanomuseCloud extends Service {
         deviceName: devices.get(bucket.from) ?? '',
         text: bucket.text,
         reasoning: bucket.reasoning,
-        tools: bucket.tools.map((t) => ({ name: t.name, stage: t.stage, summary: t.summary, ok: t.ok })),
+        tools: bucket.tools.map((t) => ({ name: t.name, stage: t.stage, summary: t.summary, ok: t.ok, textAt: t.textAt })),
         seq: bucket.seq,
         done: bucket.done,
         at: bucket.at,

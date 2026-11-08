@@ -112,7 +112,7 @@ export interface LiveStream {
   /** The reasoning written so far, beside the text. */
   reasoning: string
   /** The steps taken so far, in order. */
-  tools: Array<{ name: string; stage: 'call' | 'result'; summary: string; ok: boolean }>
+  tools: Array<{ name: string; stage: 'call' | 'result'; summary: string; ok: boolean; textAt: number }>
   /** The last sequence merged; 0 before the first batch. */
   seq: number
   /** The round is over: the bubble stops growing and its line comes down. */

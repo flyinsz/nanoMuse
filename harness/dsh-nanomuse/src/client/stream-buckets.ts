@@ -56,6 +56,13 @@ export interface StreamTool {
   stage: 'call' | 'result'
   summary: string
   ok: boolean
+  /**
+   * How much of the turn's text had been written when this step happened. A turn is not one
+   * block of prose followed by a list of steps: it reads, calls a tool, says what it found,
+   * calls another. The bubble keeps the order by slicing the text at these marks, so a step
+   * sits where it happened rather than all of them piling up after the last paragraph.
+   */
+  textAt: number
 }
 
 /** One turn in progress: the growing bubble for one `cid` + `round`. */
@@ -136,19 +143,22 @@ export function applyStreamFrame(buckets: StreamBuckets, frame: StreamFrame, at 
     seq: Math.max(base.seq, frame.seq),
     text: frame.delta ? base.text + frame.delta : base.text,
     reasoning: frame.reasoning ? base.reasoning + frame.reasoning : base.reasoning,
-    tools: frame.tool ? [...base.tools, toolOf(frame.tool)] : base.tools,
+    // The step is marked where the text stood when it arrived, so the bubble can keep the
+    // turn's own order: prose, the step, the prose after it.
+    tools: frame.tool ? [...base.tools, toolOf(frame.tool, (frame.delta ? base.text + frame.delta : base.text).length)] : base.tools,
     done: frame.done === true,
     at,
   }
   return { buckets: { ...buckets, [key]: batch }, round, changed: true }
 }
 
-function toolOf(tool: NonNullable<StreamFrame['tool']>): StreamTool {
+function toolOf(tool: NonNullable<StreamFrame['tool']>, textAt = 0): StreamTool {
   return {
     name: tool.name.trim() || tool.name,
     stage: tool.stage,
     summary: (tool.summary ?? '').trim(),
     ok: tool.ok !== false,
+    textAt,
   }
 }
 

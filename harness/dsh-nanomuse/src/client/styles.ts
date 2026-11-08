@@ -1491,17 +1491,21 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
    wears the harness's own shapes rather than a look of its own: the same left-aligned, unbordered
    body a settled answer has, so a running turn does not read as a different kind of thing that
    disappears when it finishes. */
-.nm-stream { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; align-items: flex-start; }
+.nm-stream { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; align-items: stretch; }
+/* the turn's own order: a run of prose, a step, the prose after it */
+.nm-stream-flow { display: flex; flex-direction: column; }
+.nm-stream-flow > * + * { margin-top: 6px; }
 /* the round is on: the same slow breathing light as every other "something is going on" here */
 .nm-stream-live { width: 6px; height: 6px; border-radius: 50%; background: var(--nm-accent); flex: none; margin: 0 0 2px 2px; animation: nm-breathe-light 4.8s ease-in-out infinite; }
 .nm-stream-body { max-width: 100%; box-sizing: border-box; white-space: normal; word-break: break-word; color: var(--dsw-alias-label-primary); }
-/* the Markdown inside it is the harness's own shape; only the outer box is this bubble's */
-/* nothing written yet: the bubble is a plate, not an empty pill */
 .nm-stream-body:empty { display: none; }
-.nm-stream-reasoning { max-width: 100%; box-sizing: border-box; padding: 6px 12px; border-radius: 12px; border-left: 2px solid var(--nm-divider, var(--dsw-alias-border-l2)); background: var(--dsw-alias-bg-layer-2); font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); white-space: pre-wrap; word-break: break-word; }
-.nm-stream-steps { display: flex; flex-direction: column; gap: 5px; }
-.nm-stream-step { font-size: 12px; line-height: 1.45; color: var(--dsw-alias-label-tertiary); word-break: break-word; }
+/* a step is a quiet mark in the margin, the way the harness's own tool rows read, not a
+   paragraph of its own: small, indented, one line, cut off rather than wrapped */
+.nm-stream-step { display: flex; align-items: center; gap: 6px; margin-left: 2px; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nm-stream-step::before { content: ''; width: 4px; height: 4px; border-radius: 50%; background: currentColor; flex: none; opacity: 0.55; }
 .nm-stream-step-bad { color: var(--dsw-alias-state-error-primary, #d2453d); }
+.nm-stream-step-bad::before { opacity: 1; }
+.nm-stream-reasoning { max-width: 100%; box-sizing: border-box; padding: 6px 12px; border-radius: 12px; border-left: 2px solid var(--nm-divider, var(--dsw-alias-border-l2)); background: var(--dsw-alias-bg-layer-2); font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); white-space: pre-wrap; word-break: break-word; }
 @media (prefers-reduced-motion: reduce) { .nm-stream-live { animation: none; opacity: 1; } }
 `
 

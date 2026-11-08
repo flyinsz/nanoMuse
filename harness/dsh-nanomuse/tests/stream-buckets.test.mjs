@@ -96,9 +96,19 @@ test('a tool step is a row, kept in order', () => {
   buckets = applyStreamFrame(buckets, frame({ seq: 2, tool: { name: 'read_file', stage: 'result', ok: true, summary: '12 lines' } }), 200).buckets
   const bucket = streamOf(buckets, 'c1', 'r1')
   assert.deepEqual(bucket.tools, [
-    { name: 'read_file', stage: 'call', summary: '', ok: true },
-    { name: 'read_file', stage: 'result', summary: '12 lines', ok: true },
+    { name: 'read_file', stage: 'call', summary: '', ok: true, textAt: 0 },
+    { name: 'read_file', stage: 'result', summary: '12 lines', ok: true, textAt: 0 },
   ])
+})
+
+test('a step remembers where the words stood when it happened', () => {
+  // a turn reads, calls a tool, then says what it found: the bubble has to keep that order
+  let buckets = applyStreamFrame({}, frame({ delta: 'let me look' }), 100).buckets
+  buckets = applyStreamFrame(buckets, frame({ seq: 2, tool: { name: 'shell', stage: 'call' } }), 200).buckets
+  buckets = applyStreamFrame(buckets, frame({ seq: 3, delta: ' here you are' }), 300).buckets
+  const bucket = streamOf(buckets, 'c1', 'r1')
+  assert.equal(bucket.tools[0].textAt, 'let me look'.length)
+  assert.equal(bucket.text, 'let me look here you are')
 })
 
 test('a tool result that failed carries that, for a red row', () => {
