@@ -88,6 +88,12 @@ MAX_ROUNDS = 50
 # the quietest gap between two presence posts of one run (0.31): a step that changes
 # every second still reads on the other devices as one moving line, not a stream
 PRESENCE_INTERVAL_S = 2.0
+# the quietest gap between two stream batches of one run (C13 §4): the words of a turn
+# under way here go out batched, so a long answer does not spend the relay's per-connection
+# frame budget (60 a second) on one frame per token
+STREAM_INTERVAL_S = 0.25
+# the longest tool step text one stream batch carries (the relay caps it again on arrival)
+STREAM_SUMMARY_CAP = 160
 # how often the status watcher checks it was not dropped for slowness (a full queue in
 # EventBus.publish discards the subscriber; the watcher notices and subscribes again)
 WATCH_POLL_S = 30.0
@@ -146,6 +152,12 @@ class ConversationSync:
         self._announced: dict[str, tuple[str, str]] = {}
         self._presence_scheduled: set[str] = set()
         self._status_queue: asyncio.Queue[dict[str, Any]] | None = None
+        # 0.31 / C13 §4: the words of the turns running here, batched for the relay. One
+        # accumulating buffer per conversation (a run makes its own round id), flushed on a
+        # timer: {thread id: {cid, round, delta, reasoning, tool, seq}}.
+        self._streams: dict[str, dict[str, Any]] = {}
+        # conversations whose buffered batch is already waiting out its interval
+        self._flushing: set[str] = set()
         # presence (C9): cid → {thread, device, device_name, state, detail, at} for the other
         # devices' turns under way; a frame says so, a reply or ten minutes clears it
         self.working: dict[str, dict[str, Any]] = {}
@@ -341,6 +353,10 @@ class ConversationSync:
             self.working.clear()
             self._announced.clear()
             self._presence_scheduled.clear()
+            # a batch still buffered belongs to the account that just signed out: dropping it
+            # is right (its conversation is another account's now), and nothing sends it
+            self._streams.clear()
+            self._flushing.clear()
             self._save()
             self._rehome_main(previous, account_id)
             if previous:
@@ -565,10 +581,11 @@ class ConversationSync:
             self._presence_scheduled.discard(thread.id)
 
     async def _watch_status(self) -> None:
-        """The bus's status frames (the local run's steps), feeding presence (0.31). The
-        bus drops a subscriber whose queue filled (a burst of stream frames while this
-        task waited its turn), so the wait is bounded: a dropped watcher subscribes
-        itself again rather than hanging on a queue nobody fills."""
+        """The bus's status frames (the local run's steps), feeding presence (0.31), and the
+        stream frames of the runs under way here, fed to the relay (C13 §4). The bus drops a
+        subscriber whose queue filled (a burst of stream frames while this task waited its
+        turn), so the wait is bounded: a dropped watcher subscribes itself again rather than
+        hanging on a queue nobody fills."""
         try:
             while not self._stopped:
                 q = self._status_queue
@@ -587,20 +604,183 @@ class ConversationSync:
                     msg = await asyncio.wait_for(q.get(), timeout=WATCH_POLL_S)
                 except TimeoutError:
                     continue
-                if msg.get("kind") != "status":
-                    continue
-                status = msg.get("status") or {}
-                self.status_changed(
-                    str(status.get("thread") or ""),
-                    str(status.get("state") or ""),
-                    str(status.get("detail") or ""),
-                )
+                kind = msg.get("kind")
+                if kind == "status":
+                    status = msg.get("status") or {}
+                    self.status_changed(
+                        str(status.get("thread") or ""),
+                        str(status.get("state") or ""),
+                        str(status.get("detail") or ""),
+                    )
+                elif kind in (
+                    "delta",
+                    "reasoning_delta",
+                    "tool_delta",
+                    "stream_start",
+                    "stream_end",
+                ):
+                    self.stream_frame(kind, msg)
         finally:
             q = self._status_queue
             if q is not None:
                 self.svc.bus.unsubscribe(q)
                 if self._status_queue is q:
                     self._status_queue = None
+
+    # ------------------------------------------------------------------ the run's words (C13 §4)
+    def stream_frame(self, kind: str, msg: dict[str, Any]) -> None:
+        """A stream frame from this device's own run, on its way to the relay's other devices.
+        Batched: the words accumulate and go out on a timer, so a long answer costs a handful
+        of frames a second rather than one per token (the relay allows 60 a second per socket).
+
+        Only the local run's frames are forwarded — those carry no ``round``. A frame that
+        has one was relayed *here* from another device (``_apply_stream`` feeds those to the
+        local web app), and sending it back would put its words on the relay a second time.
+        """
+        if self._stopped or not self.active or msg.get("round"):
+            return
+        thread_id = str(msg.get("thread") or "")
+        if not thread_id:
+            return
+        thread = self.svc.threads.get(thread_id)
+        if thread is None or not self._eligible(thread):
+            return
+        if kind == "stream_start":
+            return  # the round opens on its first piece; it has no frame of its own
+        if kind == "stream_end":
+            self._flush_stream(thread_id)
+            return
+        cid = self.cid_of(thread.id)
+        if not cid:
+            return
+        text = str(msg.get("text") or "")
+        if not text and kind != "tool_delta":
+            return
+        buf = self._streams.get(thread_id)
+        if buf is None:
+            buf = {
+                "cid": cid,
+                "round": new_cid(),
+                "delta": "",
+                "reasoning": "",
+                "tool": None,
+                "seq": 0,
+            }
+            self._streams[thread_id] = buf
+        if kind == "delta":
+            buf["delta"] = (str(buf["delta"]) + text)[-8192:]
+        elif kind == "reasoning_delta":
+            buf["reasoning"] = (str(buf["reasoning"]) + text)[-8192:]
+        else:  # tool_delta
+            tool = msg.get("tool") or {}
+            if not str(tool.get("name") or ""):
+                return
+            buf["tool"] = {
+                "name": str(tool.get("name") or ""),
+                "stage": "result" if tool.get("stage") == "result" else "call",
+                "summary": str(tool.get("summary") or "")[:STREAM_SUMMARY_CAP],
+                "ok": tool.get("ok") is not False,
+            }
+        self._stream_flush_soon(thread_id)
+
+    def _stream_flush_soon(self, thread_id: str) -> None:
+        """One batch per interval: the buffer keeps accumulating, and the flush already
+        scheduled carries whatever is in it when it runs."""
+        if self._stopped or thread_id in self._flushing:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._flushing.add(thread_id)
+        self._keep(loop.create_task(self._stream_flush_later(thread_id), name="sync-stream"))
+
+    async def _stream_flush_later(self, thread_id: str) -> None:
+        try:
+            await asyncio.sleep(STREAM_INTERVAL_S)
+            self._send_buffer(self._streams.get(thread_id))
+        finally:
+            self._flushing.discard(thread_id)
+
+    def _flush_stream(self, thread_id: str) -> None:
+        """The run of ``thread_id`` is over: the last batch goes, then the frame that closes
+        the round, so the other devices' bubbles settle rather than waiting for a timeout."""
+        buf = self._streams.pop(thread_id, None)
+        if buf is None:
+            return
+        self._send_buffer(buf)
+        self._post_stream(str(buf["cid"]), str(buf["round"]), int(buf["seq"]) + 1, done=True)
+
+    def _send_buffer(self, buf: dict[str, Any] | None) -> None:
+        """Send what the buffer holds; anything that arrived meanwhile stays for the next
+        round, and a batch that would carry nothing is not sent at all."""
+        if not buf:
+            return
+        delta = str(buf.get("delta") or "")
+        reasoning = str(buf.get("reasoning") or "")
+        tool = buf.get("tool")
+        if not delta and not reasoning and not tool:
+            return
+        buf["delta"] = ""
+        buf["reasoning"] = ""
+        buf["tool"] = None
+        buf["seq"] = int(buf.get("seq") or 0) + 1
+        self._post_stream(
+            str(buf["cid"]),
+            str(buf["round"]),
+            int(buf["seq"]),
+            delta=delta,
+            reasoning=reasoning,
+            tool=tool,
+        )
+
+    def _post_stream(
+        self,
+        cid: str,
+        round_id: str,
+        seq: int,
+        delta: str = "",
+        reasoning: str = "",
+        tool: dict[str, Any] | None = None,
+        done: bool = False,
+    ) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._keep(
+            loop.create_task(
+                self._send_stream(cid, round_id, seq, delta, reasoning, tool, done),
+                name="sync-stream-post",
+            )
+        )
+
+    async def _send_stream(
+        self,
+        cid: str,
+        round_id: str,
+        seq: int,
+        delta: str,
+        reasoning: str,
+        tool: dict[str, Any] | None,
+        done: bool,
+    ) -> None:
+        if self._stopped or not self.active:
+            return
+        self.client.cloud.api_key = self.svc.hub._key()
+        try:
+            await self.client.stream(
+                cid,
+                self.svc.hub.device_id,
+                round_id,
+                seq,
+                delta=delta,
+                reasoning=reasoning,
+                tool=tool,
+                done=done,
+            )
+        except Exception as exc:  # noqa: BLE001 — a lost batch costs a few words, never a retry
+            logger.debug("sync: stream batch not delivered: {}", exc)
 
     def thread_changed(self, thread: Thread) -> None:
         """Created or renamed: push now (a rename is one small request)."""

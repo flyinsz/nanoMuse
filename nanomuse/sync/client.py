@@ -53,6 +53,40 @@ class SyncClient:
             body["detail"] = detail[:DETAIL_CAP]
         await self.cloud._request("POST", "/v1/sync/working", body)
 
+    async def stream(
+        self,
+        cid: str,
+        device: str,
+        round: str,
+        seq: int,
+        delta: str = "",
+        reasoning: str = "",
+        tool: dict[str, Any] | None = None,
+        done: bool = False,
+    ) -> None:
+        """A batch of a turn running *here*, for the account's other devices to draw while it
+        runs (C13, relay 0.31). The relay stores nothing and fans it out; a lost batch costs
+        a few words, and the final text arrives the ordinary way through :meth:`push`.
+
+        ``round`` names the run, so two runs in one conversation are drawn in their own
+        bubbles rather than over each other; ``seq`` orders the batches within it. One of
+        ``delta`` / ``reasoning`` / ``tool`` must be non-empty, or the frame must close the
+        round with ``done``."""
+        body: dict[str, Any] = {
+            "cid": cid,
+            "device": device,
+            "round": round,
+            "seq": int(seq),
+            "done": bool(done),
+        }
+        if delta:
+            body["delta"] = delta
+        if reasoning:
+            body["reasoning"] = reasoning
+        if tool:
+            body["tool"] = tool
+        await self.cloud._request("POST", "/v1/sync/stream", body)
+
     async def push(
         self, device: str, conversations: list[dict[str, Any]], messages: list[dict[str, Any]]
     ) -> dict[str, Any]:

@@ -90,9 +90,11 @@ class FakeSyncRelay:
         self.pushes: list[dict[str, Any]] = []
         self.pulls: list[dict[str, Any]] = []
         self.working_calls: list[dict[str, Any]] = []
+        self.stream_calls: list[dict[str, Any]] = []
         self.calls: list[str] = []
         self.fail: CloudError | None = None
         self.fail_working: CloudError | None = None
+        self.fail_stream: CloudError | None = None
         self.names = {"phone-1": "Pixel 8", "pc-self": "Desk"}
 
         self._stores: dict[str, tuple[int, dict[str, Any], dict[str, Any]]] = {}
@@ -233,6 +235,37 @@ class FakeSyncRelay:
         if working and detail:
             call["detail"] = detail
         self.working_calls.append(call)
+
+    async def stream(
+        self,
+        cid: str,
+        device: str,
+        round: str,
+        seq: int,
+        delta: str = "",
+        reasoning: str = "",
+        tool: dict[str, Any] | None = None,
+        done: bool = False,
+    ) -> None:
+        self._check("stream")
+        if self.fail_stream is not None:
+            raise self.fail_stream
+        if cid not in self.convs:
+            raise CloudError(404, "no_conversation", "none")
+        call: dict[str, Any] = {
+            "cid": cid,
+            "device": device,
+            "round": round,
+            "seq": seq,
+            "done": done,
+        }
+        if delta:
+            call["delta"] = delta
+        if reasoning:
+            call["reasoning"] = reasoning
+        if tool:
+            call["tool"] = tool
+        self.stream_calls.append(call)
 
     async def push(
         self, device: str, conversations: list[dict[str, Any]], messages: list[dict[str, Any]]
@@ -1442,3 +1475,85 @@ def test_the_first_sign_in_keeps_the_main_chat_and_a_new_account_relogs_the_hub(
     assert service.hub.view()["devices"] == [] and service.hub.chat_models == []
     assert service.sync.account_id == "acct-B"
     assert "before sign-in" not in [e["text"] for e in _events(client, MAIN_THREAD)]
+
+
+def test_a_local_run_streams_its_words_to_the_relay(
+    main_only, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C13 §4: the words of a turn running here go up as they are written, batched, so the
+    account's other devices draw the answer while it happens instead of only at the end.
+    Without this half a run reached them when it was over, which is the bug this fixes."""
+    client, service, llm, relay = main_only
+    monkeypatch.setattr(engine_mod, "STREAM_INTERVAL_S", 0.01)
+    gate = asyncio.Event()
+
+    class StreamingLLM(MockLLM):
+        async def ask(self, messages: Any, *args: Any, **kwargs: Any) -> LLMResponse:
+            on_delta = kwargs.get("on_delta")
+            if on_delta is not None:
+                for piece in ("Hel", "lo ", "there"):
+                    on_delta(piece)
+                    await asyncio.sleep(0)
+            await gate.wait()
+            return LLMResponse(content="Hello there", finish_reason="stop")
+
+    service.threads[MAIN_THREAD].agent.llm = StreamingLLM([])
+    client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "hi"})
+    # the words leave as they are written, not when the turn ends
+    wait_for(lambda: any(c.get("delta") for c in relay.stream_calls))
+    streamed = "".join(str(c.get("delta") or "") for c in relay.stream_calls)
+    assert "Hel" in streamed and "there" in streamed
+    assert gate.is_set() is False  # none of it waited for the answer
+
+    client.portal.call(gate.set)  # type: ignore[union-attr]
+    wait_for(lambda: any(c.get("done") for c in relay.stream_calls))
+    # every batch names the conversation, the device and one round; the round closes once
+    first = relay.stream_calls[0]
+    cid = service.sync.cid_of(MAIN_THREAD)
+    assert first["cid"] == cid and first["device"] == service.hub.device_id
+    rounds = {c["round"] for c in relay.stream_calls}
+    assert len(rounds) == 1 and "" not in rounds
+    assert [c["seq"] for c in relay.stream_calls] == sorted(c["seq"] for c in relay.stream_calls)
+    assert sum(1 for c in relay.stream_calls if c.get("done")) == 1
+    # batched: many pieces of text, far fewer requests than pieces
+    assert len(relay.stream_calls) < 6
+
+
+def test_a_relayed_stream_is_not_sent_back(main_only, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The frames that came *here* from another device already carry a round; forwarding them
+    would put someone else's words on the relay a second time."""
+    client, service, llm, relay = main_only
+    monkeypatch.setattr(engine_mod, "STREAM_INTERVAL_S", 0.01)
+    client.portal.call(  # type: ignore[union-attr]
+        service.sync.stream_frame,
+        "delta",
+        {"kind": "delta", "thread": MAIN_THREAD, "round": "r-other", "text": "from elsewhere"},
+    )
+    client.portal.call(service.sync._stream_flush_later, MAIN_THREAD)  # type: ignore[union-attr]
+    assert relay.stream_calls == []
+
+
+def test_a_stream_frame_for_an_unsynced_conversation_is_dropped(
+    main_only, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the conversations the account syncs carry a cid; a side chat, or one that is not
+    eligible at all, has nothing to name on the relay and is left alone."""
+    client, service, llm, relay = main_only
+    monkeypatch.setattr(engine_mod, "STREAM_INTERVAL_S", 0.01)
+    side = service.create_thread("Side")
+    service.sync.stream_frame("delta", {"kind": "delta", "thread": side.id, "text": "x"})
+    assert relay.stream_calls == []
+
+
+def test_streaming_never_touches_presence(main_only, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The two are separate roads: batching a run's words must not change what the presence
+    line says, nor post one."""
+    client, service, llm, relay = main_only
+    monkeypatch.setattr(engine_mod, "STREAM_INTERVAL_S", 0.01)
+    before = len(relay.working_calls)
+    client.portal.call(  # type: ignore[union-attr]
+        service.sync.stream_frame,
+        "delta",
+        {"kind": "delta", "thread": MAIN_THREAD, "text": "words"},
+    )
+    assert len(relay.working_calls) == before
