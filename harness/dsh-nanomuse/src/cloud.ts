@@ -318,7 +318,17 @@ export interface LiveState {
   /** When the hands last saw an all-black screen (macOS: Screen Recording missing, or granted after the app started); 0 when they have not. */
   blackScreenAt: number
   /** Conversation sync (C8): `rev` moves with every change pulled or pushed; the session that is the account's main conversation. */
-  sync: { rev: number; mainSession: string }
+  sync: {
+    rev: number
+    mainSession: string
+    /**
+     * Session id → the device holding that conversation's context (C13, impl §A), from the
+     * relay's own word. The composer reads it to say who runs the chat: a conversation the NAS
+     * has been running is held by the NAS here, so the line under the name names it and the next
+     * plain sentence is handed to it.
+     */
+    deviceOwners: Record<string, string>
+  }
   /** Own keys and the ChatGPT sign-in (C11): how many rows, what the sign-in is doing, whether its proxy is up. */
   ownKeys: { count: number; capabilities: Capability[]; chatgpt: { signedIn: boolean; label: string; proxy: boolean; login: LoginView } }
   /** The hands' trajectory (0.1.40): `rev` moves with every step; the sessions that have a run to look back at. The runs themselves are `GET /trajectory?session=`. */
@@ -2670,7 +2680,9 @@ export default class NanomuseCloud extends Service {
       ownClip: this.ownClip.view(),
       ownClips: this.ownClip.moods(),
       blackScreenAt: this.blackScreenAt,
-      sync: this.sync ? { rev: this.sync.view().rev, mainSession: this.sync.state.mainSession } : { rev: 0, mainSession: '' },
+      sync: this.sync
+        ? { rev: this.sync.view().rev, mainSession: this.sync.state.mainSession, deviceOwners: this.sync.view().deviceOwners }
+        : { rev: 0, mainSession: '', deviceOwners: {} },
       ownKeys: {
         count: Object.keys(this.state.providers ?? {}).length,
         capabilities: this.capabilities(),

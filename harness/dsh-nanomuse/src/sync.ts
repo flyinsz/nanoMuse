@@ -599,6 +599,13 @@ export interface SyncView {
   mainSession: string
   /** Sessions that hold a synced conversation: listed in the chats column even before a turn ran here. */
   sessions: string[]
+  /**
+   * Session id → the device holding that conversation's context (C13, impl §A), as the relay
+   * reports it. What the composer reads to say who runs the chat and to hand it the sentence:
+   * only the sessions the relay has an owner for appear, so a chat it has not spoken about
+   * behaves as it always did.
+   */
+  deviceOwners: Record<string, string>
   /** Sessions that belong to another account than the one signed in (C10): hidden by the browser half, not deleted; empty when signed out. */
   foreign: string[]
   /** mids of rows deleted elsewhere: hidden in the transcript. */
@@ -679,10 +686,29 @@ export class SyncEngine {
       rev: this.rev,
       mainSession: this.state.mainSession,
       sessions: Object.keys(this.state.cids).filter((sid) => this.owns(sid)),
+      deviceOwners: this.deviceOwners(),
       foreign: this.foreign(),
       hidden: [...this.state.hidden],
       toArchive: [...this.state.toArchive],
     }
+  }
+
+  /**
+   * The device holding each synced conversation's context (C13, impl §A), by session id.
+   *
+   * Read from the relay's own word, kept per conversation (`KnownConversation.ownerDevice`), so a
+   * chat the NAS has been running comes back held by the NAS and the composer can hand it the
+   * next sentence. Only conversations this device owns appear: another account's chat is not
+   * drawn here at all, and a relay that has not said leaves the entry out.
+   */
+  deviceOwners(): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const [cid, known] of Object.entries(this.state.conversations)) {
+      const sessionId = this.sessionOfCid(cid)
+      if (!sessionId || !this.owns(sessionId)) continue
+      if (known.ownerDevice) out[sessionId] = known.ownerDevice
+    }
+    return out
   }
 
   /**

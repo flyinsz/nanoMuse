@@ -91,6 +91,22 @@ export function boundDevice(): BoundDevice | null {
   return boundDeviceFor(currentSession, hub.deviceChats, hub.devices)
 }
 
+/**
+ * The device the relay says holds this conversation's context (C13, impl §A), or undefined when
+ * it has not said. This is the conversation's own owner, read back from the sync reply — the
+ * fact the design wants carried (`docs/session-handoff.md` §2: ownership is about *the
+ * conversation*, not about where the last message came from), so a chat the NAS has been running
+ * is held by the NAS here and the next plain sentence goes there without an `@`.
+ *
+ * A record the person made by hand wins over it (`ownerOf` is asked first): `@本机` is an
+ * explicit wish about this window, and the relay's word must not undo it.
+ */
+export function relayOwner(): string | undefined {
+  if (!currentSession) return undefined
+  const device = peekLive().sync?.deviceOwners?.[currentSession]
+  return device === undefined || device === '' ? undefined : device
+}
+
 /** The devices a message may be addressed to: the ones online, this computer never one of them. */
 export function reachableDevices(): LiveDevice[] {
   return peekLive().hub.devices.filter((d) => d.online && d.name.trim().length > 0)
@@ -132,7 +148,11 @@ export function takeRoute(text: string, thisLabel: string): { target: OwnerTarge
 /** Who runs the conversation on screen right now, for the line above the composer. */
 export function currentExecutor(): OwnerTarget {
   const hub = peekLive().hub
-  return executorOf(ownerOf(currentSession), boundDevice(), hub.devices, hub.deviceId)
+  const recorded = ownerOf(currentSession)
+  // The person's own record first (`@本机` must hold), then the relay's word on the conversation,
+  // then the device whose chat this is — the same order the routing takes.
+  const owner = recorded !== undefined ? recorded : relayOwner()
+  return executorOf(owner, boundDevice(), hub.devices, hub.deviceId)
 }
 
 /** What a card needs to word itself, in the UI language. */
