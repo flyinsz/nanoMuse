@@ -12,7 +12,7 @@ import { api, AuthError, connectWs, getToken } from "./api";
 import { getLocale, t } from "./i18n";
 import { liveWorking } from "./presence";
 import { registerWorker, setAppBadge } from "./push";
-import { appendReasoning, appendText, dropEndedStreams, dropStreamById, endStream, startStream, type StreamBuckets } from "./streams";
+import { appendReasoning, appendText, appendTool, dropEndedStreams, dropStreamById, endStream, startStream, type StreamBuckets } from "./streams";
 import { useTheme } from "./theme";
 import { readStorage, writeStorage } from "./util";
 import type {
@@ -461,6 +461,8 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
       return { ...state, streams: appendText(state.streams, msg.thread, msg.id, msg.text, msg.round) };
     case "reasoning_delta":
       return { ...state, streams: appendReasoning(state.streams, msg.thread, msg.id, msg.text, msg.round) };
+    case "tool_delta":
+      return { ...state, streams: appendTool(state.streams, msg.thread, msg.id, msg.tool, msg.round) };
     case "stream_end":
       return { ...state, streams: endStream(state.streams, msg.thread, msg.id, msg.discard, msg.round) };
     case "status": {

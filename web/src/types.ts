@@ -1453,6 +1453,19 @@ export interface FileInfo {
   modified: string;
 }
 
+/**
+ * One step of a live run on the wire (contract C13 §4, the relay frame's `tool` field): the
+ * tool's name, whether it is being called or answering, its one-line summary and — on a result
+ * — whether it went well. Every field but `name` is optional, so a runtime that knows less
+ * still draws the row.
+ */
+export interface StreamToolFrame {
+  name: string;
+  stage?: string;
+  summary?: string;
+  ok?: boolean;
+}
+
 export type WsMessage =
   | { kind: "hello"; state: StateSnapshot }
   | { kind: "event"; event: TimelineEvent }
@@ -1460,6 +1473,8 @@ export type WsMessage =
   | { kind: "stream_start"; thread: string; id: string; ts: string; round?: string }
   | { kind: "delta"; thread: string; id: string; text: string; round?: string }
   | { kind: "reasoning_delta"; thread: string; id: string; text: string; round?: string }
+  /** a step of a live run: the tool the model reached for, or what came back (contract C13 §4) */
+  | { kind: "tool_delta"; thread: string; id: string; round?: string; tool: StreamToolFrame }
   | { kind: "stream_end"; thread: string; id: string; discard?: boolean; round?: string }
   | { kind: "status"; status: Status }
   | { kind: "thread"; thread: ThreadMeta }

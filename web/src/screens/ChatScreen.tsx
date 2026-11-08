@@ -18,7 +18,7 @@ import { localDetail, localLabel, useLocale, useT } from "../i18n";
 import { mentionSuggestions, mentionTarget } from "../mention";
 import { WORKING_TTL_MS } from "../presence";
 import { useStore } from "../store";
-import { streamsForThread, type Stream } from "../streams";
+import { streamsForThread, type Stream, type StreamTool } from "../streams";
 import type { AttachmentInfo, HubDevice, SkillInfo, ThreadMeta, TimelineEvent, UserEvent, WorkingPresence } from "../types";
 import { cx, timeDivider, timeShort } from "../util";
 import { MuseSheet } from "./MuseSheet";
@@ -39,7 +39,7 @@ export function ChatScreen() {
   const liveStreams = useMemo(() => streamsForThread(state.streams, activeThread), [state.streams, activeThread]);
   // the one the screen speaks for (a screen reader hears the run still writing, else the last)
   const stream = useMemo(() => liveStreams.find((s) => !s.ended) ?? liveStreams[0], [liveStreams]);
-  const streamingNow = liveStreams.some((s) => s.text || s.reasoning);
+  const streamingNow = liveStreams.some((s) => s.text || s.reasoning || s.tools.length);
   const thread = threads.find((t) => t.id === activeThread);
   const [activityOpen, setActivityOpen] = useState(false);
   // the browser card being watched (or driven) full-screen
@@ -336,8 +336,11 @@ export function ChatScreen() {
             />
           ))}
           {liveStreams.map((s) =>
-            s.text || s.reasoning ? (
-              <AssistantBubble key={s.id} text={s.text} reasoning={s.reasoning} streaming files={files} onOpenFile={openFile} />
+            s.text || s.reasoning || s.tools.length ? (
+              <div key={s.id}>
+                <LiveSteps tools={s.tools} />
+                <AssistantBubble text={s.text} reasoning={s.reasoning} streaming files={files} onOpenFile={openFile} />
+              </div>
             ) : null,
           )}
           <LiveReply stream={stream} name={name} />
@@ -682,6 +685,26 @@ function TypingIndicator({ label }: { label?: string }) {
       <span className="sr-only">{t("On it")}</span>
       {label && <span className="text-[12px] text-muted">{label}</span>}
     </div>
+  );
+}
+
+/**
+ * The steps a live run has taken so far (contract C13 §4), drawn above the reply it is writing
+ * with the very chip the persisted `tool` events use — a device watching another device's run
+ * sees the same row it will see afterwards, rather than a second visual language. A `call` is
+ * still running; a `result` says how it went.
+ */
+function LiveSteps({ tools }: { tools: StreamTool[] }) {
+  if (tools.length === 0) return null;
+  return (
+    <>
+      {tools.map((step, i) => (
+        <ToolChip
+          key={`${i}:${step.name}:${step.stage}`}
+          event={{ tool: step.name, summary: step.summary, status: step.stage === "call" ? "running" : step.ok ? "ok" : "error" }}
+        />
+      ))}
+    </>
   );
 }
 

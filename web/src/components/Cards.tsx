@@ -42,7 +42,6 @@ import type {
   NoticeEvent,
   QuestionEvent,
   RiskLevel,
-  ToolEvent,
 } from "../types";
 import { cx, fileKind, timeShort } from "../util";
 
@@ -145,7 +144,22 @@ function ArgsList({ args }: { args: Record<string, unknown> }) {
 }
 
 // ------------------------------------------------------------------ tool activity chip
-export function ToolChip({ event }: { event: ToolEvent }) {
+/**
+ * The fields a tool row draws. A persisted tool event has all of them; a step of a live stream
+ * (contract C13 §4) has only the name, what it did and how it went — the chip is the same either
+ * way, so a device watching another device's run sees the same row it would see afterwards.
+ */
+export interface ToolRow {
+  tool: string;
+  summary: string;
+  title?: string;
+  status: "running" | "ok" | "error" | "blocked";
+  device?: string;
+  args?: Record<string, unknown>;
+  output?: string;
+}
+
+export function ToolChip({ event }: { event: ToolRow }) {
   const [open, setOpen] = useState(false);
   const icon =
     event.status === "running" ? (
@@ -174,7 +188,7 @@ export function ToolChip({ event }: { event: ToolEvent }) {
         </span>
         {open && (
           <div className="mt-2 text-fg">
-            <ArgsList args={event.args} />
+            <ArgsList args={event.args ?? {}} />
             {event.output && (
               <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-bg p-2 text-[12px] leading-snug">
                 {event.output}

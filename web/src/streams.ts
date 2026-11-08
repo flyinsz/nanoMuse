@@ -6,15 +6,33 @@
  * frame carries a `round` (the id of that turn), so a bucket is keyed by conversation *and*
  * round, and two streams in one conversation no longer collide.
  *
+ * What a bucket holds is the whole of a reply being written (contract C13 §4): its text, its
+ * live reasoning, and the steps it took — the tool it called and what came back — because a
+ * device watching another device's run should see all three, not only the words.
+ *
  * Frames from an older runtime carry no `round`: they keep the old behaviour exactly, one
  * bucket per conversation. Pure, so the store stays thin and the rule can be pinned by tests.
  */
+
+/**
+ * One step of a live run: the tool it called, or what that tool returned (contract C13 §4).
+ * `ok` is only meaningful on a `result` row; a `call` row is neither good nor bad yet.
+ */
+export interface StreamTool {
+  name: string;
+  stage: "call" | "result";
+  /** what the step did or found, as the runtime described it; "" when it gave none */
+  summary: string;
+  ok: boolean;
+}
 
 export interface Stream {
   id: string;
   text: string;
   /** live reasoning, streamed this turn only; the final event carries the fold */
   reasoning: string;
+  /** the run's steps so far, in the order they were reported; a row never vanishes between batches */
+  tools: StreamTool[];
   ended: boolean;
   /** the run this stream belongs to; absent on frames from a runtime older than the round id */
   round?: string;
@@ -39,7 +57,7 @@ export function bucketKey(thread: string, round?: string): string {
  * round starts over, as one bucket has always started over.
  */
 export function startStream(buckets: StreamBuckets, thread: string, id: string, round?: string): StreamBuckets {
-  return { ...buckets, [bucketKey(thread, round)]: { id, text: "", reasoning: "", ended: false, round } };
+  return { ...buckets, [bucketKey(thread, round)]: { id, text: "", reasoning: "", tools: [], ended: false, round } };
 }
 
 /**
@@ -50,7 +68,7 @@ export function startStream(buckets: StreamBuckets, thread: string, id: string, 
 export function appendText(buckets: StreamBuckets, thread: string, id: string, text: string, round?: string): StreamBuckets {
   const key = bucketKey(thread, round);
   const current = buckets[key];
-  const stream: Stream = current && current.id === id ? { ...current, text: current.text + text } : { id, text, reasoning: "", ended: false, round };
+  const stream: Stream = current && current.id === id ? { ...current, text: current.text + text } : { id, text, reasoning: "", tools: [], ended: false, round };
   return { ...buckets, [key]: stream };
 }
 
@@ -58,7 +76,43 @@ export function appendText(buckets: StreamBuckets, thread: string, id: string, t
 export function appendReasoning(buckets: StreamBuckets, thread: string, id: string, text: string, round?: string): StreamBuckets {
   const key = bucketKey(thread, round);
   const current = buckets[key];
-  const stream: Stream = current && current.id === id ? { ...current, reasoning: current.reasoning + text } : { id, text: "", reasoning: text, ended: false, round };
+  const stream: Stream = current && current.id === id ? { ...current, reasoning: current.reasoning + text } : { id, text: "", reasoning: text, tools: [], ended: false, round };
+  return { ...buckets, [key]: stream };
+}
+
+/** A tool row off the wire as it arrives: every field unknown until checked (see `appendTool`). */
+export interface ToolInput {
+  name?: string;
+  stage?: string;
+  summary?: string;
+  ok?: boolean;
+}
+
+/**
+ * A `tool` step of a live run (contract C13 §4): the `call` row when the model reaches for a
+ * tool, the `result` row when it comes back. Rows are appended rather than replaced, so the
+ * transcript reads in order and a step never vanishes between two batches of a coalesced frame.
+ *
+ * The same rule as the two deltas: it lands on the open stream of this round (by id), and a
+ * frame naming no open stream opens one — an old runtime's per-conversation behaviour. A step
+ * with no name is not a step: the buckets come back as the *same object*, so the store can skip
+ * the re-render. A result defaults to `ok` (a row says it failed only when it says so).
+ */
+export function appendTool(buckets: StreamBuckets, thread: string, id: string, tool: ToolInput, round?: string): StreamBuckets {
+  const name = (tool.name ?? "").trim();
+  if (!name) return buckets;
+  const row: StreamTool = {
+    name,
+    stage: tool.stage === "result" ? "result" : "call",
+    summary: (tool.summary ?? "").trim(),
+    ok: tool.ok !== false,
+  };
+  const key = bucketKey(thread, round);
+  const current = buckets[key];
+  const stream: Stream =
+    current && current.id === id
+      ? { ...current, tools: [...current.tools, row] }
+      : { id, text: "", reasoning: "", tools: [row], ended: false, round };
   return { ...buckets, [key]: stream };
 }
 
