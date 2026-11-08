@@ -121,7 +121,12 @@ class FakeSyncRelay:
 
     # -- what a test seeds
     def add_conversation(
-        self, cid: str, kind: str = "side", title: str = "A chat", device: str = "phone-1"
+        self,
+        cid: str,
+        kind: str = "side",
+        title: str = "A chat",
+        device: str = "phone-1",
+        owner_device: str = "",
     ) -> None:
         self.convs[cid] = {
             "cid": cid,
@@ -132,6 +137,9 @@ class FakeSyncRelay:
             "created_at": 1738000000,
             "updated_at": 1738000000,
             "deleted": False,
+            # C13: the relay falls back to the creator, and never lets an empty value clear a
+            # real owner (impl §A) — the same rule the real relay keeps.
+            "owner_device": owner_device or device,
             "seq": self._next(),
         }
 
@@ -301,15 +309,30 @@ class FakeSyncRelay:
                     "created_at": c.get("created_at", 0),
                     "updated_at": c.get("updated_at", 0),
                     "deleted": bool(c.get("deleted")),
+                    # a new row's owner is what the client said, else its creator (impl §A)
+                    "owner_device": c.get("owner_device") or device,
                     "seq": self._next(),
                 }
                 accepted += 1
             elif c.get("deleted"):
                 self.tombstone_conversation(cid)
                 accepted += 1
-            elif c.get("title") != self.convs[cid]["title"]:
-                self.convs[cid].update(title=c.get("title", ""), seq=self._next())
-                accepted += 1
+            else:
+                # C13: a push that names an owner sets it; one that names none leaves the row's
+                # owner alone — an empty value never clears a real one (impl §A). The timestamp
+                # rule is the relay's: only a row not older than the one it holds is rewritten.
+                new_owner = c.get("owner_device") or self.convs[cid].get("owner_device") or ""
+                moved = new_owner != self.convs[cid].get("owner_device")
+                if c.get("title") != self.convs[cid]["title"] or moved:
+                    self.convs[cid].update(
+                        title=c.get("title", ""),
+                        owner_device=new_owner,
+                        updated_at=max(
+                            int(c.get("updated_at", 0)), int(self.convs[cid].get("updated_at", 0))
+                        ),
+                        seq=self._next(),
+                    )
+                    accepted += 1
         for m in messages:
             if m["cid"] in redirected:
                 rejected.append(
@@ -1724,3 +1747,37 @@ def test_a_bad_frame_does_not_silence_the_watcher(main_only, monkeypatch) -> Non
     client.portal.call(run)  # type: ignore[union-attr]
     # the frame written *after* the bad one was read: the watcher outlived it
     assert handled == ["delta"]
+
+
+def test_a_push_with_no_turn_of_its_own_does_not_claim_the_conversation(synced) -> None:
+    """C13 (impl §A) / `docs/session-handoff.md` §2: an owner is a fact about the conversation,
+    moved by `@` and by nothing else. A conversation body that goes up only because its title is
+    new says nothing about who holds the context, so it must not name one.
+
+    Measured: an always-on runtime syncs around the clock, so "the last device to push" quietly
+    became the owner of every chat — the NAS held a main chat whose own creator was the phone,
+    and every device read the NAS as where its sentences should go, which is what the person saw
+    as a strip stuck on one device."""
+    client, service, _llm, relay = synced
+    # a conversation naming a title, with no turn of ours in it
+    side = client.post("/api/threads", json={"title": "Trip"}).json()
+    wait_for(lambda: any(c["title"] == "Trip" for c in relay.convs.values()))
+    body = next(c for p in relay.pushes for c in p["conversations"] if c["title"] == "Trip")
+    assert "owner_device" not in body, "a title-only push must not say who holds the chat"
+    # the relay falls back to the creator, which is this device on its own new conversation
+    cid = service.sync.cid_of(side["id"])
+    assert relay.convs[cid]["owner_device"] == "pc-self"
+
+
+def test_the_device_that_runs_the_turn_holds_the_conversation(synced) -> None:
+    """The other half of the same rule: when this device *does* run a turn of a conversation, the
+    answer going up is the profile of holding it, and the owner follows to here."""
+    client, service, llm, relay = synced
+    theirs = str(uuid.uuid4())
+    relay.add_conversation(theirs, "main", "Main chat", device="phone-1")
+    client.post("/api/sync/pull")
+    # a turn of ours on the account's main chat: we are the one running it, so we hold it
+    llm.script.append(LLMResponse(content="desk answer", finish_reason="stop"))
+    client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "desk question"})
+    wait_for(lambda: any(m["text"] == "desk answer" for m in relay.msgs.values()))
+    assert relay.convs[theirs]["owner_device"] == "pc-self"

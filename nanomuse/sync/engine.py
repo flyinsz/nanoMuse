@@ -1255,33 +1255,39 @@ class ConversationSync:
                 if not self._eligible(thread):
                     continue
                 cid = self._cid_for(thread)
-                # C13: the owner goes up whenever the relay has not confirmed this device as
-                # the holder. `self.state["device_owners"]` holds the relay's word (see
-                # `_note_device_owner`), so an empty value means "not confirmed", not "not sent".
-                owner_changed = self.device_owner_of(thread.id) != device
-                if self.state["titles"].get(thread.id) != thread.title or owner_changed:
-                    # An owner that has not been told yet goes up with a fresh `updated_at`: the
-                    # relay only rewrites a row whose `updated_at` is not older than the one it
-                    # holds, so an unchanged timestamp would leave the owner unrecorded forever.
+                unsynced = self._unsynced(thread, cid)
+                # C13: this device holds a conversation's context when it ran a turn of it — the
+                # answer going up is the profile of that. Asking is not holding: the device that
+                # hands a sentence over also writes a `user` row (same `mid`, impl §5), so a
+                # question typed here must never claim a chat another device is the one running.
+                # Nor is repeating a title a claim: an always-on runtime syncs around the clock,
+                # and "last to push" quietly made it the owner of chats it had never run a turn of
+                # (measured: the NAS held a main chat whose own creator was the phone). The relay
+                # keeps the owner it was given, falls back to the creator on a row nobody claimed,
+                # and `@` is what moves one on (`docs/session-handoff.md` §2: ownership is a fact
+                # about the conversation, not about where the last frame came from).
+                claims = any(ev.get("type") == "assistant" for ev, _wire in unsynced)
+                if self.state["titles"].get(thread.id) != thread.title or claims:
+                    # A claim goes up with a fresh `updated_at`: the relay only rewrites a row
+                    # whose `updated_at` is not older than the one it holds, so a timestamp that
+                    # had not moved would leave the owner unrecorded forever.
                     stamp = _unix(thread.updated_at)
-                    if owner_changed:
+                    if claims:
                         stamp = max(stamp, int(time.time()))
-                    conversations.append(
-                        {
-                            "cid": cid,
-                            "kind": "main" if thread.id == MAIN_THREAD else "side",
-                            "title": thread.title,
-                            "created_at": _unix(thread.created_at),
-                            "updated_at": stamp,
-                            # C13 / impl §A: the device holding this conversation's full context.
-                            # This engine holds it for every thread it pushes (`_eligible` keeps
-                            # other devices' threads out), so it is the owner. On the wire because
-                            # the other devices read it back to know whose turn it is: a phone
-                            # that pulls this chat has no other way to learn where it belongs.
-                            "owner_device": device,
-                        }
-                    )
-                for ev, wire in self._unsynced(thread, cid):
+                    row: dict[str, Any] = {
+                        "cid": cid,
+                        "kind": "main" if thread.id == MAIN_THREAD else "side",
+                        "title": thread.title,
+                        "created_at": _unix(thread.created_at),
+                        "updated_at": stamp,
+                    }
+                    if claims:
+                        # impl §A: the device holding this conversation's full context. On the
+                        # wire because the other devices read it back to know whose turn it is: a
+                        # phone that pulls this chat has no other way to learn where it belongs.
+                        row["owner_device"] = device
+                    conversations.append(row)
+                for ev, wire in unsynced:
                     if len(messages) >= BATCH:
                         break
                     messages.append(wire)
