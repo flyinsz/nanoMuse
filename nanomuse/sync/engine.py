@@ -633,6 +633,24 @@ class ConversationSync:
             self._presence_scheduled.discard(thread.id)
 
     async def _watch_status(self) -> None:
+        """Keep the watcher alive for as long as the engine is up.
+
+        The watcher below is the only route a run's words have to the other devices, and it
+        is started once, when the hub comes up — nothing starts it again. So a frame it cannot
+        read must not end it: it ends the frame. Restarting here, after a pause, is what keeps
+        a single unreadable frame from silencing every run for the rest of the process' life
+        (measured: one bad batch at 12:48 and no run reached the relay again that afternoon).
+        """
+        while not self._stopped:
+            try:
+                await self._watch_status_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — the watcher outranks the frame it choked on
+                logger.warning("sync: the status watcher restarted after {}", exc)
+                await asyncio.sleep(WATCH_POLL_S)
+
+    async def _watch_status_once(self) -> None:
         """The bus's status frames (the local run's steps), feeding presence (0.31), and the
         stream frames of the runs under way here, fed to the relay (C13 §4). The bus drops a
         subscriber whose queue filled (a burst of stream frames while this task waited its
@@ -656,30 +674,40 @@ class ConversationSync:
                     msg = await asyncio.wait_for(q.get(), timeout=WATCH_POLL_S)
                 except TimeoutError:
                     continue
-                kind = msg.get("kind")
-                if kind == "status":
-                    status = msg.get("status") or {}
-                    self.status_changed(
-                        str(status.get("thread") or ""),
-                        str(status.get("state") or ""),
-                        str(status.get("detail") or ""),
-                    )
-                elif kind in (
-                    "delta",
-                    "reasoning_delta",
-                    "tool_delta",
-                    "stream_start",
-                    "stream_end",
-                    "event",
-                    "update",
-                ):
-                    self.stream_frame(kind, msg)
+                # One frame must not end the watcher: a shape this code does not expect costs
+                # that frame and nothing more. `_watch_status` restarts after an escape, so
+                # even an error raised outside this guard is survivable.
+                try:
+                    self._watch_status_frame(msg)
+                except Exception as exc:  # noqa: BLE001 — one bad frame is not the end
+                    logger.warning("sync: a bus frame was dropped: {}", exc)
         finally:
             q = self._status_queue
             if q is not None:
                 self.svc.bus.unsubscribe(q)
                 if self._status_queue is q:
                     self._status_queue = None
+
+    def _watch_status_frame(self, msg: dict[str, Any]) -> None:
+        """Act on one frame from the bus: a run's status, or a piece of the words it is writing."""
+        kind = msg.get("kind")
+        if kind == "status":
+            status = msg.get("status") or {}
+            self.status_changed(
+                str(status.get("thread") or ""),
+                str(status.get("state") or ""),
+                str(status.get("detail") or ""),
+            )
+        elif kind in (
+            "delta",
+            "reasoning_delta",
+            "tool_delta",
+            "stream_start",
+            "stream_end",
+            "event",
+            "update",
+        ):
+            self.stream_frame(kind, msg)
 
     # ------------------------------------------------------------------ the run's words (C13 §4)
     def stream_frame(self, kind: str, msg: dict[str, Any]) -> None:

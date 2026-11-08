@@ -8,6 +8,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1686,3 +1687,37 @@ def test_one_turn_is_one_round_however_many_times_it_speaks(main_only) -> None:
     assert (
         "".join(str(c.get("delta") or "") for c in relay.stream_calls) == "let me look here you are"
     )
+
+
+def test_a_bad_frame_does_not_silence_the_watcher(main_only, monkeypatch) -> None:
+    """C13 §4: the watcher is the only road a run's words have to the other devices, and it is
+    started once, when the hub comes up — nothing starts it again. So a frame it cannot read must
+    cost that frame and nothing more. A frame that escaped ended the task outright: measured, one
+    bad batch at 12:48 and no run reached the relay again for the rest of that process' life."""
+    client, service, _llm, _relay = main_only
+    sync = service.sync
+    handled: list[str] = []
+    monkeypatch.setattr(sync, "stream_frame", lambda kind, msg: handled.append(kind))
+
+    async def run() -> None:
+        # the one watcher, exactly as `start()` makes it; this test drives its queue directly
+        task = asyncio.get_running_loop().create_task(sync._watch_status())
+        await asyncio.sleep(0)
+        q = sync._status_queue
+        assert q is not None
+        # a frame the reader chokes on: `status` is consulted as a mapping and is not one
+        q.put_nowait({"kind": "status", "status": "not-a-mapping"})
+        # and then a piece of a run, which must still get through
+        q.put_nowait({"kind": "delta", "thread": MAIN_THREAD, "text": "hi"})
+        for _ in range(80):
+            await asyncio.sleep(0.05)
+            if handled:
+                break
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    sync._stopped = False
+    client.portal.call(run)  # type: ignore[union-attr]
+    # the frame written *after* the bad one was read: the watcher outlived it
+    assert handled == ["delta"]
