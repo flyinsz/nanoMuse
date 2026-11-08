@@ -187,8 +187,20 @@ class SyncEngine(
             // the main chat has no title of its own on this phone: it is named once, never renamed from here
             val titleChanged = map.kind != "main" && map.pushedTitle != s.title
             val touched = msgs.any { it.cid == map.cid }
+            // C13: this phone holds a conversation's context when it ran a turn of it — the answer
+            // going up is the profile of that. Asking is not holding: a sentence handed to another
+            // device still writes its own `user` row here (impl section 5, one `mid`), so a question
+            // typed on this phone must never claim a chat the other device is the one running. Nor
+            // does repeating a title claim anything: the NAS runtime syncs around the clock, so
+            // "last to push" would quietly make it the owner of chats it never ran (measured: it
+            // held a main chat whose own creator was this phone). Only `@` moves an owner besides
+            // this (`docs/session-handoff.md` section 2: 归属是会话的事实，不是上一条消息从哪来).
+            val ranTurn = msgs.any { it.cid == map.cid && it.role == "assistant" }
             if (!map.pushed || titleChanged || touched) {
-                convs += OutConversation(map.cid, map.kind, s.title, s.createdAt / 1000, s.updatedAt / 1000, ownerDevice = map.ownerDevice)
+                convs += OutConversation(
+                    map.cid, map.kind, s.title, s.createdAt / 1000, s.updatedAt / 1000,
+                    ownerDevice = if (ranTurn || !map.pushed) deviceId else map.ownerDevice,
+                )
                 titles[map.cid] = map to s.title
             }
         }
