@@ -168,15 +168,28 @@ STREAM_PIECE_CAP = 4096
 
 
 def clean_tool(value: object) -> dict | None:
-    """A tool's progress in a `stream` frame: `{name, stage}` with stage `call` or `result`.
-    Anything else → None (the frame carries no tool bit, which is valid)."""
+    """A tool's progress in a `stream` frame: `{name, stage, summary?, ok?}` with stage
+    `call` or `result`. Anything else → None (the frame carries no tool bit, which is
+    valid).
+
+    `summary` and `ok` travel too (C13): the three apps draw the step with the same chip
+    they use for the finished transcript, which shows what the tool was for and whether it
+    failed, so a step that crossed the relay must carry both or the watching device draws
+    a nameless row. `summary` is capped like every other piece; `ok` is only sent when the
+    device said `false` (an absent key means it worked, as the clients read it)."""
     if not isinstance(value, dict):
         return None
     stage = str(value.get("stage") or "")
     if stage not in ("call", "result"):
         return None
     name = str(value.get("name") or "")[:STREAM_PIECE_CAP]
-    return {"name": name, "stage": stage}
+    out = {"name": name, "stage": stage}
+    summary = str(value.get("summary") or "")[:DETAIL_CAP]
+    if summary:
+        out["summary"] = summary
+    if value.get("ok") is False:
+        out["ok"] = False
+    return out
 
 
 def stream_frame(body: dict, device: str) -> dict:

@@ -760,6 +760,28 @@ def test_hub_carries_stream_to_the_other_devices(ws_client):
         assert frame["round"] == "r1" and frame["seq"] == 1 and frame["delta"] == "思考中"
         assert frame["reasoning"] == "hmm" and frame["tool"] == {"name": "shell", "stage": "call"}
         assert frame["done"] is False
+        # a step carries what it was for and whether it failed: the watching device draws
+        # the same chip as the transcript, which shows both (C13)
+        ws_client.post(
+            "/v1/sync/stream",
+            json={
+                "cid": cid,
+                "device": "pc-1",
+                "round": "r1",
+                "seq": 2,
+                "tool": {"name": "shell", "stage": "result", "summary": "ls -la", "ok": False},
+            },
+            headers=headers,
+        )
+        step = phone.receive_json()
+        assert step["tool"] == {"name": "shell", "stage": "result", "summary": "ls -la", "ok": False}
+        # a step that worked omits `ok` (as the clients read an absent key)
+        ws_client.post(
+            "/v1/sync/stream",
+            json={"cid": cid, "device": "pc-1", "round": "r1", "seq": 3, "tool": {"name": "read_file", "stage": "call", "ok": True}},
+            headers=headers,
+        )
+        assert phone.receive_json()["tool"] == {"name": "read_file", "stage": "call"}
         # the sender hears nothing of its own (its next frame is the pong)
         pc.send_json({"type": "ping"})
         assert pc.receive_json()["type"] == "pong"
