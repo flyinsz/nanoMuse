@@ -39,6 +39,13 @@ class RemoteChatBridge(
         fun show(id: String, task: Task)
         suspend fun finish(sessionId: String, id: String, task: Task)
         fun afterTurn()
+        /**
+         * The sentence named a device and that device is running it: record it as this chat's
+         * owner (C13, `docs/session-handoff.md` §2, "`@` 显式切换，且黏住"). Without this the
+         * line over the strip said "Run by this device" the moment after `@Desk` was sent, and
+         * the next plain sentence went home instead of following the mention.
+         */
+        fun aimed(deviceId: String) {}
     }
     private class Active(val id: String, val task: Task) { var job: Job? = null }
     private var active: Active? = null
@@ -59,6 +66,10 @@ class RemoteChatBridge(
         if (!route.device.online) return refuse(text, Issue.OFFLINE, route.device.name)
         if (attachments) return refuse(text, Issue.ATTACHMENTS)
         if (route.text.isBlank()) { host.restoreDraft(text); return true }
+        // The mention moved the owner (C13): recorded here, at the one place a sentence that
+        // names a device is routed, so the line over the strip and the next sentence's
+        // destination cannot disagree with where this one went.
+        host.aimed(route.device.id)
         val id = UUID.randomUUID().toString()
         val run = Active(id, newTask(route.device, route.text, id))
         active = run

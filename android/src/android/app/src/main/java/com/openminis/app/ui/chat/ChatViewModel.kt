@@ -6433,7 +6433,37 @@ class ChatViewModel(
         // claimed by the bridge above; this is the aim-only path, and the one that still works
         // when the account's other devices are not in the bridge's list yet.
         if (nmSendToDevice(text)) { nmCountableTurn = false; return }
+        // nanoMuse: C13, `docs/session-handoff.md` §2 — `@本机` brings the owner home, and it
+        // sticks: the next plain sentence runs here rather than springing back to the device this
+        // chat was last handed to. Written as the empty aim, which is what "this phone" is
+        // (`DeviceAim`), because a missing entry means "ask the chat's own device" instead.
+        // The mention-only case is not a sentence, so an empty body leaves the aim alone.
+        if (nmHomeMention(text)) nmAimAt(null)
         sendMessage(text, skipContextCheck = false)
+    }
+
+    /**
+     * Whether [text] opens by naming this phone as the device to run it, on the wording the
+     * design gives (`@本机`), this phone's own name on the account, or the word the strip shows
+     * for it — the same three names the Mac client accepts (`session-owner.ts`'s `thisNames`).
+     * Only the mention is looked at: the words after it are the sentence, and an `@` on its own
+     * is nothing to send, so it counts as no mention at all.
+     */
+    private fun nmHomeMention(text: String): Boolean {
+        val body = text.trimStart()
+        if (!body.startsWith("@")) return false
+        val mine = io.github.nanomuse.hub.Hub.devices.value.firstOrNull { it.isThis }?.name.orEmpty()
+        val names = listOf(
+            "本机",
+            context.getString(R.string.nm_device_this),
+            mine,
+        ).map { it.trim() }.filter { it.isNotEmpty() }
+        val rest = body.drop(1)
+        val hit = names.firstOrNull { name ->
+            rest.startsWith(name, ignoreCase = true) &&
+                (rest.length == name.length || !rest[name.length].isLetterOrDigit())
+        } ?: return false
+        return rest.drop(hit.length).isNotBlank()
     }
 
     // nanoMuse: only the adapter touches upstream state; the lifecycle lives in RemoteChatBridge.
@@ -6478,6 +6508,11 @@ class ChatViewModel(
                 }
             }
             override fun afterTurn() { nmSendNextQueued() }
+            // C13: a sentence that named a device runs on it, and the owner stays there — the
+            // line over the strip and the next plain sentence both read the aim (`DeviceAim`),
+            // so recording it here is what keeps the mention sticky. Written before the send
+            // resolves so the strip draws the new owner as the turn starts.
+            override fun aimed(deviceId: String) { nmAimAt(deviceId) }
         }
         io.github.nanomuse.sync.RemoteChatBridge(viewModelScope, host) { device, text, id ->
             io.github.nanomuse.sync.RemoteTaskChat(context, device, text, id)
