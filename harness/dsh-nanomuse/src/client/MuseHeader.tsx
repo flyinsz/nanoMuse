@@ -12,12 +12,14 @@ import { dismissStar, markStarred, nudgeText, openStar } from './AccountPage.tsx
 import type { Translate } from './api.ts'
 import { Avatar, motionStatus, type Mood } from './Avatar.tsx'
 import { describeCall } from './Capsule.tsx'
+import { useDeviceTask } from './device-task.ts'
 import { IconCheck, IconChevronLeft, IconHeart, IconMenu, IconSpinner } from './icons.tsx'
 import { useLive } from './live.ts'
 import { mainChatId } from './MuseChats.tsx'
 import { usePrefs } from './prefs.ts'
 import { statusWords } from './ProfileDrawer.tsx'
 import { activityOf, nav, useRooms } from './rooms.ts'
+import { deviceIcon, executorText, useExecutorTarget } from './ExecutorLine.tsx'
 import { useWin } from './win.ts'
 
 /** "Done" stays this long after a turn ends; the approvals toast this long. */
@@ -92,10 +94,24 @@ export function MuseHeader({ t, openProfile, useSessionStatus }: MuseHeaderProps
 
   const calls = live.hands.calls
   const hands = calls.length ? calls[calls.length - 1] : undefined
+  const task = useDeviceTask()
+  const executor = useExecutorTarget(current)
+  // A run handed to another device (C13): the line under the name says which device has the
+  // chat and what it is doing there, in that device's own words, so the answer's arrival is
+  // never a surprise. It comes before the local run's steps: the person is waiting on a
+  // machine somewhere else, and this chat's own status has nothing to say about it.
+  const deviceRun = task.phase === 'asking' && (!task.sessionId || task.sessionId === current)
   let mood: Mood = 'idle'
   let line: ReactNode = null
   let tone = ''
-  if (waiting) {
+  if (deviceRun) {
+    mood = 'working'
+    tone = 'nm-live'
+    const step = task.steps.length ? task.steps[task.steps.length - 1] : task.asked
+    line = executor.kind === 'device'
+      ? t('exWorking', { device: executor.name, step: step ?? '' })
+      : t('exWorking', { device: task.device, step: step ?? '' })
+  } else if (waiting) {
     mood = 'waiting'
     tone = 'nm-wait'
     line = askingYou ? t('statusAsking') : t('statusNeedsApproval')
@@ -146,6 +162,15 @@ export function MuseHeader({ t, openProfile, useSessionStatus }: MuseHeaderProps
       h('button', { type: 'button', className: `nm-header-face${running ? ' nm-live' : waiting ? ' nm-wait' : ''}`, 'aria-label': live.profile.name || t('brand'), title: t('railProfile'), onClick: openProfile },
         h(Avatar, { size: 44, profile: live.profile, mood })),
       h('div', { className: 'nm-header-name' }, live.profile.name || t('brand')),
+      executor.kind === 'device' && !deviceRun
+        // which device holds this chat, always on screen under the name (C13): `@Desk` moved the
+        // owner and nothing else changed, so a person who forgot where the last sentence went
+        // has to be able to see it before typing the next one. While that device is running, the
+        // status line below already says so, and this would only repeat it.
+        ? h('div', { className: `nm-header-executor${executor.online ? '' : ' nm-ex-off'}`, 'data-testid': 'nm-header-executor', title: executorText(t, executor, t('otherDevice')) },
+            h(deviceIcon(live.hub.devices, executor.id), { size: 12 }),
+            h('span', { className: 'nm-header-executor-text' }, executorText(t, executor, t('otherDevice'))))
+        : null,
       toast
         ? h('div', { className: 'nm-header-status nm-header-toast' }, h(IconCheck, { size: 13 }), t('statusApproved', { n: toast.n }))
         : starAsk

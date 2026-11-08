@@ -1235,17 +1235,11 @@ html[data-nm-platform='darwin']:not([data-nm-fullscreen]) .nm-lib-col-top { heig
 .nm-ac { position: fixed; left: 50%; bottom: 108px; transform: translateX(-50%); z-index: 58; width: min(440px, calc(100vw - 32px)); padding: 12px 14px 14px; border-radius: 16px; background: var(--dsw-alias-bg-primary, #fff); color: var(--dsw-alias-label-primary); box-shadow: 0 18px 48px rgba(0,0,0,0.22), 0 0 0 1px var(--nm-divider); animation: nm-card-in 220ms ease-out; display: flex; flex-direction: column; gap: 10px; }
 @keyframes nm-card-in { from { opacity: 0; transform: translate(-50%, 8px) scale(0.98); } to { opacity: 1; transform: translateX(-50%); } }
 html[data-nm-profile] .nm-ac { left: calc(50% - 155px); }
-/* ---- a device task's progress line, inside the chat it belongs to (device-task.ts) ---- */
-.nm-dt-line { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 0 6px; padding: 7px 10px; border-radius: 10px; background: var(--nm-hover); color: var(--dsw-alias-label-secondary); font-size: 12.5px; }
-.nm-dt-line svg { flex: none; }
-.nm-dt-line-title { flex: none; font-weight: 600; }
-.nm-dt-line-asked { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
-/* ---- which device runs this conversation, above the composer (ExecutorLine.tsx, C13) ---- */
-.nm-ex-line { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 6px; padding: 2px 4px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
-.nm-ex-line svg { flex: none; opacity: 0.85; }
-.nm-ex-line-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nm-ex-self .nm-ex-line-text { opacity: 0.75; }
-.nm-ex-off { color: var(--dsw-alias-state-warn-primary); }
+/* ---- which device runs this conversation, under the chat's name (MuseHeader.tsx, C13) ---- */
+.nm-header-executor { display: flex; align-items: center; gap: 5px; font-size: 11.5px; line-height: 1.2; color: var(--dsw-alias-label-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.nm-header-executor svg { flex: none; opacity: 0.85; }
+.nm-header-executor-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nm-header-executor.nm-ex-off { color: var(--dsw-alias-state-warn-primary); }
 .nm-ac-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .nm-ac-title { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); letter-spacing: 0.02em; }
 .nm-ac-desc { margin: 0; font-size: 14px; line-height: 1.45; }
