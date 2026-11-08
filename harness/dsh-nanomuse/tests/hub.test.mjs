@@ -339,3 +339,95 @@ test('a push goes out only once the relay lists event_push, and features are rea
   h.client.stop()
   assert.equal(h.client.push('*', body), false, 'nothing is queued while the socket is down')
 })
+
+// A turn running on another device (contract C13, §4): the relay's `stream` frame is read and
+// merged by client/stream-buckets.ts, and the merged buckets are handed to the listener. The
+// wire shape is frozen in docs/tasks/session-handoff-impl.md §B.
+const streamFrame = (over = {}) => ({ type: 'stream', cid: 'c1', from: 'phone-1', round: 'r1', seq: 1, delta: 'Hi', done: false, ...over })
+
+test('a stream frame lands in the buckets and names the device it runs on', async () => {
+  const h = harness()
+  const s = await connected(h)
+  const seen = []
+  h.client.onStream((frame) => seen.push(frame))
+  s.push(streamFrame({ delta: 'Hello' }))
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].frame.cid, 'c1')
+  assert.equal(seen[0].frame.round, 'r1')
+  assert.equal(seen[0].frame.done, false)
+  assert.equal(h.client.streams['c1\u0000r1'].text, 'Hello')
+  assert.equal(h.client.streams['c1\u0000r1'].from, 'phone-1')
+  h.client.stop()
+})
+
+test('two batches are one growing bucket, and a duplicate seq is dropped without a listener call', async () => {
+  const h = harness()
+  const s = await connected(h)
+  let calls = 0
+  h.client.onStream(() => { calls += 1 })
+  s.push(streamFrame({ delta: 'Hello' }))
+  s.push(streamFrame({ seq: 2, delta: ' there' }))
+  assert.equal(calls, 2)
+  assert.equal(h.client.streams['c1\u0000r1'].text, 'Hello there')
+  // the relay reconnected and re-sent the batch: the text must not double
+  s.push(streamFrame({ seq: 2, delta: ' there' }))
+  assert.equal(calls, 2, 'a dropped frame wakes nobody')
+  assert.equal(h.client.streams['c1\u0000r1'].text, 'Hello there')
+  h.client.stop()
+})
+
+test('two rounds of one conversation are two buckets, so neither overwrites the other', async () => {
+  const h = harness()
+  const s = await connected(h)
+  s.push(streamFrame({ round: 'r1', delta: 'first' }))
+  s.push(streamFrame({ round: 'r2', delta: 'second' }))
+  assert.equal(h.client.streams['c1\u0000r1'].text, 'first')
+  assert.equal(h.client.streams['c1\u0000r2'].text, 'second')
+  assert.equal(Object.keys(h.client.streams).length, 2)
+  h.client.stop()
+})
+
+test('a frame that is not a stream, or carries nothing to draw, is left alone', async () => {
+  const h = harness()
+  const s = await connected(h)
+  let calls = 0
+  h.client.onStream(() => { calls += 1 })
+  s.push({ type: 'working', cid: 'c1', from: 'phone-1', working: true, at: 1 })
+  s.push({ type: 'stream', cid: 'c1', round: 'r1' })
+  s.push({ type: 'stream', round: 'r1', delta: 'x' })
+  s.push({ type: 'stream', cid: 'c1', delta: 'x' })
+  assert.equal(calls, 0)
+  assert.deepEqual(h.client.streams, {})
+  h.client.stop()
+})
+
+test('done closes the round: text is kept, later frames are dropped', async () => {
+  const h = harness()
+  const s = await connected(h)
+  s.push(streamFrame({ delta: 'the end', done: true }))
+  assert.equal(h.client.streams['c1\u0000r1'].text, 'the end')
+  assert.equal(h.client.streams['c1\u0000r1'].done, true)
+  s.push(streamFrame({ seq: 9, delta: 'more' }))
+  assert.equal(h.client.streams['c1\u0000r1'].text, 'the end')
+  h.client.stop()
+})
+
+test('a lone done still reaches the listener, so a lost opening batch leaves no line spinning', async () => {
+  const h = harness()
+  const s = await connected(h)
+  const seen = []
+  h.client.onStream((frame) => seen.push(frame))
+  s.push({ type: 'stream', cid: 'c1', from: 'phone-1', round: 'r1', seq: 4, done: true })
+  assert.equal(seen.length, 1)
+  assert.equal(h.client.streams['c1\u0000r1'].done, true)
+  h.client.stop()
+})
+
+test('a stream frame from another account is not a thing: the buckets go when the hub stops', async () => {
+  const h = harness()
+  const s = await connected(h)
+  s.push(streamFrame({ delta: 'x' }))
+  assert.equal(Object.keys(h.client.streams).length, 1)
+  h.client.stop()
+  assert.deepEqual(h.client.streams, {}, 'the buckets belonged to the account that was signed in')
+})

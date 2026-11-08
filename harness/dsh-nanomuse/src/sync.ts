@@ -690,6 +690,16 @@ export class SyncEngine {
   }
 
   /**
+   * The session a conversation lives in here, when one does (C13). The reverse of `cidOf`, for
+   * the browser half: a `stream` frame names a conversation, and the bubble has to be drawn in
+   * the chat that conversation is, not in whichever chat is open. Another account's session is
+   * never returned (C10), as `workingOf` does not return its presence.
+   */
+  sessionOfCid(cid: string): string | undefined {
+    return this.sessionOf(cid)
+  }
+
+  /**
    * Whether a session is the signed-in account's or nobody's yet (C10): what is shown, pushed
    * and dressed with the other devices' turns. Signed out, every session is.
    */

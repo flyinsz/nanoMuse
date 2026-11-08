@@ -77,6 +77,15 @@ export interface StreamBucket {
 /** Every stream of one conversation, by round. */
 export type StreamBuckets = Record<string, StreamBucket>
 
+/**
+ * How long a round that went quiet is still worth drawing. A `stream` frame is fire and forget,
+ * so a device that crashed mid-run, or a relay that dropped the last batch behind a `done`,
+ * leaves a bucket nobody closes; past this its line is dropped rather than spinning under a
+ * conversation that ended. Both ends read it: the host prunes its map by it, and the bubble
+ * treats it as the bound past which a line it was handed is no longer live.
+ */
+export const STREAM_TTL_MS = 2 * 60_000
+
 export interface StreamUpdate {
   /** The buckets as they stand: a new object when something changed, the same one when not. */
   buckets: StreamBuckets

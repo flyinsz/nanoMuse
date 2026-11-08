@@ -7,7 +7,14 @@
  * it, because Node's WebSocket cannot set headers. Plain `WebSocket`, no Cordis
  * — the service in `cloud.ts` owns the lifetime and the tests drive this
  * against a fake socket.
+ *
+ * A `stream` frame (contract C13, §4) is a turn running on another device: the relay
+ * batches its text, reasoning and tool steps and fans them out to the account's other
+ * sockets. The frame is read and merged by `client/stream-buckets.ts`, whose state is a
+ * plain map of buckets (`cid` + `round`), and the merged buckets are what the browser
+ * half draws. `onStream` says when one landed, as `onWorking` does for presence.
  */
+import { applyStreamFrame, pruneStreams, readStreamFrame, STREAM_TTL_MS, type StreamBuckets, type StreamFrame } from './client/stream-buckets.ts'
 
 /** A device as the relay lists it. */
 export interface HubDevice {
@@ -30,6 +37,14 @@ export interface HubWorking {
   working: boolean
   /** Unix seconds, the relay's clock. */
   at: number
+}
+
+/** What a `stream` frame is called on its way out of this client: the buckets as they stand. */
+export interface HubStream {
+  /** Every round in progress, by `cid` + `round` (`client/stream-buckets.ts`). */
+  buckets: StreamBuckets
+  /** The frame's own body, for a listener that would rather key its own state by round. */
+  frame: StreamFrame
 }
 
 /** What this device says about itself in `hello`. */
@@ -147,6 +162,13 @@ export class HubClient {
   features: string[] = []
   /** The reason the last connection ended, for the UI. */
   lastError: string | undefined
+  /**
+   * The turns running on the account's other devices right now, merged from their `stream`
+   * frames (`client/stream-buckets.ts`). A plain map by `cid` + `round`, kept here rather
+   * than in the browser half so a stream survives the window closing: the relay does not
+   * replay, but the batches already seen are still worth drawing while the run goes on.
+   */
+  streams: StreamBuckets = {}
 
   private socket: SocketLike | undefined
   private running = false
@@ -165,6 +187,7 @@ export class HubClient {
     profile: new Set<(rev: number, device: string) => void>(),
     sync: new Set<(cursor: number, device: string) => void>(),
     working: new Set<(frame: HubWorking) => void>(),
+    stream: new Set<(frame: HubStream) => void>(),
     unauthorized: new Set<Listener>(),
   }
   private seq = 0
@@ -186,6 +209,8 @@ export class HubClient {
     this.closeSocket(1000, reason)
     this.failPending(new HubError('disconnected', reason))
     this.devices = []
+    // The buckets belong to the account that was signed in; a stopped hub is on none.
+    this.streams = {}
     this.setConnected(false)
   }
 
@@ -238,6 +263,16 @@ export class HubClient {
   onWorking(listener: (frame: HubWorking) => void): () => void {
     this.listeners.working.add(listener)
     return () => this.listeners.working.delete(listener)
+  }
+
+  /**
+   * Another device's turn sent a batch of its output (contract C13, §4). The frame is already
+   * merged into `streams`; a listener redraws from there. Fired for every accepted batch, and
+   * once for a lone `done` so a round whose opening batch was lost still ends its line.
+   */
+  onStream(listener: (frame: HubStream) => void): () => void {
+    this.listeners.stream.add(listener)
+    return () => this.listeners.stream.delete(listener)
   }
 
   /** The relay refused the key (close 4001): the owner should forget the account. */
@@ -434,6 +469,21 @@ export class HubClient {
       case 'working': {
         const working: HubWorking = { cid: String(frame.cid ?? ''), from: String(frame.from ?? ''), device_name: String(frame.device_name ?? ''), working: frame.working === true, at: Number(frame.at ?? 0) }
         for (const listener of this.listeners.working) listener(working)
+        return
+      }
+      case 'stream': {
+        // A turn running on another device (C13, §4). The reader drops anything that is not a
+        // stream, names no conversation or round, or has nothing to draw: a relay newer than
+        // this build sends fields it does not know, and half a bubble is worse than none.
+        const parsed = readStreamFrame(frame)
+        if (!parsed) return
+        const update = applyStreamFrame(this.streams, parsed)
+        if (!update.changed) return
+        // A quiet round ages out here too, so a device that crashed mid-run leaves no line
+        // spinning under a finished conversation.
+        this.streams = pruneStreams(update.buckets, { ttlMs: STREAM_TTL_MS })
+        const body: HubStream = { buckets: this.streams, frame: parsed }
+        for (const listener of this.listeners.stream) listener(body)
         return
       }
       case 'pong':

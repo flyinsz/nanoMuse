@@ -95,6 +95,32 @@ export interface LiveAsk {
   at: number
 }
 
+/** One round in progress on another device, as the host mirrors it (contract C13, §4). */
+export interface LiveStream {
+  /** The conversation it runs in. */
+  cid: string
+  /** The chat this conversation is here, so the bubble is drawn in the right one. */
+  session: string
+  /** The turn's id: what tells two streams of one conversation apart. */
+  round: string
+  /** The device running it. */
+  from: string
+  /** The device's name, as the account lists it. */
+  deviceName: string
+  /** The text written so far. */
+  text: string
+  /** The reasoning written so far, beside the text. */
+  reasoning: string
+  /** The steps taken so far, in order. */
+  tools: Array<{ name: string; stage: 'call' | 'result'; summary: string; ok: boolean }>
+  /** The last sequence merged; 0 before the first batch. */
+  seq: number
+  /** The round is over: the bubble stops growing and its line comes down. */
+  done: boolean
+  /** When the last batch arrived, in epoch milliseconds; a quiet round ages out on this. */
+  at: number
+}
+
 /** The last thing the hands did, for the capsule's caption, the glow's marker and the trajectory. */
 export interface LiveStageAction {
   kind: string
@@ -133,6 +159,8 @@ export interface Live {
   cloud: { signedIn: boolean; hint: string }
   profile: LiveProfile
   hub: LiveHub
+  /** The rounds running on the account's other devices right now (C13): the bubbles in the chat. Absent on an older host. */
+  streams?: LiveStream[] | undefined
   /** The calls in flight, the step count, and the run that has this screen (`run`; absent on an older host, null between runs). */
   hands: { calls: LiveCall[]; steps: number; run?: LiveScreenRun | null }
   stage: LiveStage

@@ -47,6 +47,9 @@ import { RemoteApprovals } from './remote-approvals.ts'
 import { brief, REMOTE_ACTIONS, run as runAction, type RemoteAction } from './actions.ts'
 import { CODING_ACTIONS, CodingService, codingBrief, GATED_CODING_ACTIONS } from './coding.ts'
 import { helloLlm, HubClient, HubError, type Caller, type HubDevice, type IncomingCall } from './hub.ts'
+// The shape the browser half reads for a running turn (C13, §4). Type-only, so the host bundle
+// still pulls in nothing of the client but the pure merge in `stream-buckets.ts`.
+import type { LiveStream } from './client/live.ts'
 import { ProfileStore, type Profile } from './profile.ts'
 import { cloudOffFailure, relayFailure, transportFailure, type RelayRefusal } from './refusals.ts'
 import { Relay, RelayError, type Account, type Estimate, type Invite, type ProfileWrite, type RelayModel, type SignIn } from './relay.ts'
@@ -326,6 +329,12 @@ export interface LiveState {
   waiting: Array<{ since: number; session: string }>
   /** Turns the person stopped by hand and has not yet said why (0.31): the session, the turn's number, when; for the question above that chat's composer. */
   stopped: Array<{ session: string; turn: number; at: number }>
+  /**
+   * The rounds running on the account's other devices right now (C13, §4): their text, reasoning
+   * and steps so far. The browser half draws one bubble per `session` + `round`, so two runs in
+   * one chat do not overwrite each other. Absent on an older host, and empty while none runs.
+   */
+  streams?: LiveStream[]
 }
 
 /** What Settings → Account's "ways on", the own-key step and the pickers read (`GET /providers`). */
@@ -1080,6 +1089,9 @@ export default class NanomuseCloud extends Service {
       )
       ctx.effect(() => this.hub.onSync((cursor, from) => sync.onFrame({ cursor, from })), 'nanomuse cloud: sync frame')
       ctx.effect(() => this.hub.onWorking((frame) => sync.onWorking(frame)), 'nanomuse cloud: working frame')
+      // A turn running on another device sent a batch of its output (C13, §4). The buckets are
+      // already merged in `hub.ts` (keyed by conversation + round); the page only has to hear.
+      ctx.effect(() => this.hub.onStream(() => this.broadcast()), 'nanomuse cloud: stream frame')
       ctx.effect(
         () =>
           this.hub.onState(() => {
@@ -2668,6 +2680,7 @@ export default class NanomuseCloud extends Service {
       headsUp: this.headsUp(),
       waiting: [...this.waits.values()].sort((a, b) => a.since - b.since),
       stopped: [...this.stops.entries()].map(([session, s]) => ({ session, ...s })),
+      streams: this.streamsView(),
     }
   }
 
@@ -2684,6 +2697,38 @@ export default class NanomuseCloud extends Service {
   /** How many turns from the account's other devices a session here shows (C8). */
   syncRemoteLines(sessionId: string): number {
     return this.kept?.linesOf(sessionId).length ?? 0
+  }
+
+  /**
+   * The rounds running on the account's other devices, as the browser half draws them (C13, §4).
+   * The buckets are kept by `hub.ts` (keyed by `cid` + `round`); here each is resolved to the
+   * session that conversation is here, so the bubble lands in the right chat. A conversation
+   * with no session here yet is left out: there is no thread to draw it in, and the final text
+   * arrives by conversation sync once the round ends (the design's "最终文本由 sync 兜底").
+   */
+  private streamsView(): NonNullable<LiveState['streams']> {
+    const sync = this.sync
+    if (!sync) return []
+    const devices = new Map(this.hub.devices.map((d) => [d.id, d.name]))
+    const out: NonNullable<LiveState['streams']> = []
+    for (const bucket of Object.values(this.hub.streams)) {
+      const session = sync.sessionOfCid(bucket.cid)
+      if (!session) continue
+      out.push({
+        cid: bucket.cid,
+        session,
+        round: bucket.round,
+        from: bucket.from,
+        deviceName: devices.get(bucket.from) ?? '',
+        text: bucket.text,
+        reasoning: bucket.reasoning,
+        tools: bucket.tools.map((t) => ({ name: t.name, stage: t.stage, summary: t.summary, ok: t.ok })),
+        seq: bucket.seq,
+        done: bucket.done,
+        at: bucket.at,
+      })
+    }
+    return out
   }
 
   /** The main chat named by the host (the first conversation): the session it ends up in. */

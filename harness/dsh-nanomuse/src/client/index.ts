@@ -23,6 +23,7 @@ import { renderApprovalScopes } from './ApprovalScopes.ts'
 import { syncOverlay } from './overlay.ts'
 import { renderFenceCards } from './FenceCards.ts'
 import { renderRemoteBubbles } from './RemoteBubbles.ts'
+import { renderStreamBubbles } from './StreamBubbles.ts'
 import { makeFirstRunIntro } from './FirstRun.tsx'
 import { AllowanceHeadsUp } from './AllowanceWays.tsx'
 import { WaitLine } from './WaitLine.tsx'
@@ -691,6 +692,8 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => renderFenceCards(t), 'nanomuse: fence cards')
   // The turns written on the account's other devices, as bubbles in the thread (C8).
   ctx.effect(() => renderRemoteBubbles(t), 'nanomuse: remote bubbles')
+  // The turns still being written there, drawn as they land (C13, §4).
+  ctx.effect(() => renderStreamBubbles(t), 'nanomuse: stream bubbles')
 
   // The avatar studio: a sheet over the window, from the look editor or the agent's draw_new_look.
   const AvatarStudio = makeAvatarStudio({ t })
