@@ -1081,6 +1081,245 @@ def test_the_working_frame_reaches_the_web_app(main_only) -> None:
         assert ws.receive_json()["state"]["working"][0]["device"] == "phone-1"
 
 
+# ----------------------------------------------------------------------------- C13: the stream
+_STREAM_KINDS = ("stream_start", "delta", "reasoning_delta", "tool_delta", "stream_end")
+
+
+def _stream_frames(queue: Any) -> list[dict[str, Any]]:
+    """The streaming frames a bus subscriber received (what a web socket would get)."""
+    out: list[dict[str, Any]] = []
+    while not queue.empty():
+        msg = queue.get_nowait()
+        if msg.get("kind") in _STREAM_KINDS:
+            out.append(msg)
+    return out
+
+
+def test_a_relayed_stream_frame_reaches_the_local_web_app(synced) -> None:
+    """Contract C13 §4, the reverse of `_relay_run`: a `stream` frame the relay pushed because
+    *another* device is running a conversation this one holds is fed to this device's own web
+    app — its text as `delta`, carrying the frame's `round` so the Web app buckets by round,
+    closed by a `stream_end` when the frame says `done`."""
+    client, service, llm, relay = synced
+    wait_for(lambda: relay.pulls)
+    main_cid = service.sync._cid_for(service.threads[MAIN_THREAD])
+    queue = service.bus.subscribe()
+    try:
+        client.portal.call(
+            service.sync.on_frame,
+            {
+                "type": "stream",
+                "cid": main_cid,
+                "from": "phone-1",
+                "round": "r1",
+                "seq": 1,
+                "delta": "hello ",
+                "done": False,
+            },
+        )  # type: ignore[union-attr]
+        client.portal.call(
+            service.sync.on_frame,
+            {
+                "type": "stream",
+                "cid": main_cid,
+                "from": "phone-1",
+                "round": "r1",
+                "seq": 2,
+                "delta": "world",
+                "done": True,
+            },
+        )  # type: ignore[union-attr]
+        frames = _stream_frames(queue)
+    finally:
+        service.bus.unsubscribe(queue)
+    deltas = [f for f in frames if f["kind"] == "delta"]
+    assert [f["text"] for f in deltas] == ["hello ", "world"]
+    # the round rides every frame, and the stream lives on this conversation
+    assert all(f["round"] == "r1" and f["thread"] == MAIN_THREAD for f in frames)
+    starts = [f for f in frames if f["kind"] == "stream_start"]
+    ends = [f for f in frames if f["kind"] == "stream_end"]
+    assert starts and ends and starts[0]["id"] == deltas[0]["id"] == ends[0]["id"]
+    # nothing was persisted on this device: the relayed words are the owner's, not ours
+    assert "hello world" not in [e.get("text") for e in _events(client, MAIN_THREAD)]
+
+
+def test_a_relayed_stream_lands_on_its_own_thread_not_the_readers(synced) -> None:
+    """The web app's streaming entry points read the thread from a contextvar; a relayed frame
+    is applied on the *target* conversation. A side chat's round is drawn on that side chat,
+    not on whatever thread the hub's reader task happens to be in."""
+    client, service, llm, relay = synced
+    wait_for(lambda: relay.pulls)
+    side = service.create_thread("A side chat")
+    cid = service.sync._cid_for(side)
+    queue = service.bus.subscribe()
+    try:
+        client.portal.call(
+            service.sync.on_frame,
+            {
+                "type": "stream",
+                "cid": cid,
+                "from": "phone-1",
+                "round": "r2",
+                "seq": 1,
+                "delta": "on the side",
+                "done": False,
+            },
+        )  # type: ignore[union-attr]
+        frames = _stream_frames(queue)
+    finally:
+        service.bus.unsubscribe(queue)
+    assert frames and all(f["thread"] == side.id for f in frames)
+    assert [f["text"] for f in frames if f["kind"] == "delta"] == ["on the side"]
+
+
+def test_a_relayed_stream_carries_reasoning_and_tool_steps(synced) -> None:
+    """Reasoning travels as its own `reasoning_delta` (when thinking is shown), and a tool the
+    run reached for or a result it got comes as a `tool_delta` bus frame with the frozen shape
+    — the kind the Web app appends to the round's bubble."""
+    client, service, llm, relay = synced
+    wait_for(lambda: relay.pulls)
+    service.ui.show_thinking = True  # reasoning deltas reach the bus only when thinking is shown
+    main_cid = service.sync._cid_for(service.threads[MAIN_THREAD])
+    queue = service.bus.subscribe()
+    try:
+        for frame in (
+            {"reasoning": "weighing it", "seq": 1},
+            {
+                "tool": {"name": "web_search", "stage": "call", "summary": "looking it up"},
+                "seq": 2,
+            },
+            {
+                "tool": {"name": "web_search", "stage": "result", "summary": "3 hits", "ok": True},
+                "seq": 3,
+            },
+        ):
+            client.portal.call(
+                service.sync.on_frame,
+                {"type": "stream", "cid": main_cid, "from": "phone-1", "round": "r3", **frame},
+            )  # type: ignore[union-attr]
+        frames = _stream_frames(queue)
+    finally:
+        service.bus.unsubscribe(queue)
+    reasoning = [f for f in frames if f["kind"] == "reasoning_delta"]
+    assert [f["text"] for f in reasoning] == ["weighing it"]
+    tools = [f for f in frames if f["kind"] == "tool_delta"]
+    assert all(f["kind"] == "tool_delta" and f["round"] == "r3" for f in tools)
+    assert [t["tool"]["name"] for t in tools] == ["web_search", "web_search"]
+    assert [t["tool"]["stage"] for t in tools] == ["call", "result"]
+    assert tools[1]["tool"]["summary"] == "3 hits" and tools[1]["tool"]["ok"] is True
+    # a tool result that says it failed is shown as failed; a call is neither yet
+    assert tools[0]["tool"]["ok"] is True
+
+
+def test_a_relayed_stream_from_ourselves_or_an_unknown_cid_is_ignored(synced) -> None:
+    """The two filters `_apply_working` already has: this device's own echo (the relay echoes
+    nothing back to the sender, but a reconnect can race) and a conversation this device does
+    not hold are both dropped — no bubble on a chat that is not here."""
+    client, service, llm, relay = synced
+    wait_for(lambda: relay.pulls)
+    main_cid = service.sync._cid_for(service.threads[MAIN_THREAD])
+    queue = service.bus.subscribe()
+    try:
+        # from this very device
+        client.portal.call(
+            service.sync.on_frame,
+            {
+                "type": "stream",
+                "cid": main_cid,
+                "from": "pc-self",
+                "round": "r4",
+                "seq": 1,
+                "delta": "echo",
+            },
+        )  # type: ignore[union-attr]
+        # a conversation this device never held
+        client.portal.call(
+            service.sync.on_frame,
+            {
+                "type": "stream",
+                "cid": str(uuid.uuid4()),
+                "from": "phone-1",
+                "round": "r5",
+                "seq": 1,
+                "delta": "elsewhere",
+            },
+        )  # type: ignore[union-attr]
+        time.sleep(0.05)
+        assert _stream_frames(queue) == []
+    finally:
+        service.bus.unsubscribe(queue)
+
+
+def test_a_relayed_round_and_a_local_run_keep_separate_bubbles(synced) -> None:
+    """The point of the `round` on every frame (contract C13 §4): a stream relayed here and a
+    run happening here share one conversation, yet neither overwrites the other. The local
+    run keys by the thread alone and the relayed round by thread + round, so both bubbles
+    grow side by side in the same chat."""
+    client, service, llm, relay = synced
+    wait_for(lambda: relay.pulls)
+    main_cid = service.sync._cid_for(service.threads[MAIN_THREAD])
+    queue = service.bus.subscribe()
+    try:
+        # a run happening here (no round), a turn on the phone relayed in (round r7)
+        client.portal.call(service.ui.on_text_delta, "local ")  # type: ignore[union-attr]
+        client.portal.call(
+            service.sync.on_frame,
+            {
+                "type": "stream",
+                "cid": main_cid,
+                "from": "phone-1",
+                "round": "r7",
+                "seq": 1,
+                "delta": "remote",
+            },
+        )  # type: ignore[union-attr]
+        client.portal.call(service.ui.on_text_delta, "words")  # type: ignore[union-attr]
+        frames = _stream_frames(queue)
+    finally:
+        service.bus.unsubscribe(queue)
+    local_ids = {f["id"] for f in frames if "round" not in f}
+    remote_ids = {f["id"] for f in frames if f.get("round") == "r7"}
+    assert local_ids and remote_ids and local_ids.isdisjoint(remote_ids)
+    assert [f["text"] for f in frames if f["kind"] == "delta" and "round" not in f] == [
+        "local ",
+        "words",
+    ]
+    assert [f["text"] for f in frames if f["kind"] == "delta" and f.get("round") == "r7"] == [
+        "remote"
+    ]
+
+
+def test_a_relayed_stream_does_not_touch_the_working_map(main_only) -> None:
+    """`working` and `stream` are two independent paths: a `stream` frame draws a bubble and
+    leaves the presence map alone; a `working` frame still sets and clears its line."""
+    client, service, llm, relay = main_only
+    wait_for(lambda: relay.pulls)
+    main_cid = service.sync._cid_for(service.threads[MAIN_THREAD])
+    client.portal.call(
+        service.sync.on_frame,
+        {
+            "type": "stream",
+            "cid": main_cid,
+            "from": "phone-1",
+            "round": "r6",
+            "seq": 1,
+            "delta": "x",
+        },
+    )  # type: ignore[union-attr]
+    assert service.sync.working_view() == []
+    client.portal.call(
+        service.sync.on_frame,
+        {
+            "type": "working",
+            "cid": main_cid,
+            "from": "phone-1",
+            "working": True,
+            "at": int(time.time()),
+        },
+    )  # type: ignore[union-attr]
+    assert [w["device"] for w in service.sync.working_view()] == ["phone-1"]
+
+
 # ----------------------------------------------------------------------------- C10: whose conversations
 def _titles(client: TestClient) -> set[str]:
     return {t["title"] for t in client.get("/api/threads").json()}

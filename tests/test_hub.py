@@ -1083,6 +1083,23 @@ def test_forwarded_text_and_delta_stages_are_told_apart() -> None:
     assert sent == [{"stage": "delta", "id": "a1", "text": "grow", "partial": True}]
 
 
+def test_the_stream_frame_is_dispatched_to_the_sync_engine_like_sync_and_working() -> None:
+    """Contract C13 §4: the relay's `stream` frame is the *third* kind the runtime's one
+    dispatch (`_on_frame`) hands to the sync engine, beside `sync` and `working`. A frame
+    type the runtime does not know is still ignored, so an older runtime is unbroken."""
+    from nanomuse.hub.client import HubClient
+
+    seen: list[dict[str, Any]] = []
+    client = HubClient("wss://x", "nm_k", "pc-self", "Desk", actions=[], on_sync=seen.append)
+    client._on_frame({"type": "sync", "cursor": 1, "from": "phone-1"})
+    client._on_frame({"type": "working", "cid": "c", "from": "phone-1", "working": True})
+    client._on_frame(
+        {"type": "stream", "cid": "c", "from": "phone-1", "round": "r1", "delta": "hi"}
+    )
+    client._on_frame({"type": "something_new", "from": "phone-1"})
+    assert [f["type"] for f in seen] == ["sync", "working", "stream"]
+
+
 @pytest.mark.parametrize("finish", ["stop", "timeout"])
 def test_old_task_forwarding_cannot_stop_a_successor(
     hub_server, monkeypatch: pytest.MonkeyPatch, finish: str

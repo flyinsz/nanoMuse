@@ -70,6 +70,14 @@ _SKIP_DIRS = {"node_modules", "__pycache__", ".venv", "venv", ".git", "browser-p
 _SCAN_CAP = 3000
 
 
+def _stream_key(thread: str, round: str) -> str:
+    """Where a stream's temporary id and buffer live. A local run names no ``round`` and keys
+    by the thread alone — one stream per conversation, exactly as before. A relayed round
+    (contract C13 §4) keys by thread *and* round, so two streams in one conversation — one
+    here, one handed to another device — no longer clobber each other."""
+    return f"{thread}\x00{round}" if round else thread
+
+
 class WebUI:
     """Turns agent callbacks into timeline events + live WebSocket messages."""
 
@@ -378,32 +386,117 @@ class WebUI:
         return working[0]
 
     # ------------------------------------------------------------------ UI protocol
-    def on_text_delta(self, text: str) -> None:
+    def on_text_delta(self, text: str, round: str = "") -> None:
+        # ``round`` names a run relayed here from another device (contract C13 §4): the Web
+        # app buckets a stream by conversation *and* round, so its bubble is not overwritten
+        # by a second run in the same conversation. A local run passes nothing and keeps the
+        # one-stream-per-conversation behaviour (an empty ``round`` is left out of the frame).
         if not text:
             return
         thread = self.thread()
-        sid = self._stream_ids.get(thread)
+        key = _stream_key(thread, round)
+        sid = self._stream_ids.get(key)
         if sid is None:
             sid = new_id("a")
-            self._stream_ids[thread] = sid
-            self._stream_buf[thread] = ""
-            self.bus.publish({"kind": "stream_start", "thread": thread, "id": sid, "ts": now_iso()})
-        self._stream_buf[thread] = self._stream_buf.get(thread, "") + text
-        self.bus.publish({"kind": "delta", "thread": thread, "id": sid, "text": text})
+            self._stream_ids[key] = sid
+            self._stream_buf[key] = ""
+            start: dict[str, Any] = {
+                "kind": "stream_start",
+                "thread": thread,
+                "id": sid,
+                "ts": now_iso(),
+            }
+            if round:
+                start["round"] = round
+            self.bus.publish(start)
+        self._stream_buf[key] = self._stream_buf.get(key, "") + text
+        delta: dict[str, Any] = {"kind": "delta", "thread": thread, "id": sid, "text": text}
+        if round:
+            delta["round"] = round
+        self.bus.publish(delta)
 
-    def on_reasoning_delta(self, text: str) -> None:
+    def on_reasoning_delta(self, text: str, round: str = "") -> None:
         # live thinking, streamed to the bubble but never persisted on its own:
         # the final assistant event carries the full reasoning for the "Show thinking" fold
+        # (``round``: as in :meth:`on_text_delta`, the run a relayed stream belongs to)
         if not text or not self.show_thinking:
             return
         thread = self.thread()
-        sid = self._stream_ids.get(thread)
+        key = _stream_key(thread, round)
+        sid = self._stream_ids.get(key)
         if sid is None:
             sid = new_id("a")
-            self._stream_ids[thread] = sid
-            self._stream_buf[thread] = ""
-            self.bus.publish({"kind": "stream_start", "thread": thread, "id": sid, "ts": now_iso()})
-        self.bus.publish({"kind": "reasoning_delta", "thread": thread, "id": sid, "text": text})
+            self._stream_ids[key] = sid
+            self._stream_buf[key] = ""
+            start: dict[str, Any] = {
+                "kind": "stream_start",
+                "thread": thread,
+                "id": sid,
+                "ts": now_iso(),
+            }
+            if round:
+                start["round"] = round
+            self.bus.publish(start)
+        reasoning: dict[str, Any] = {
+            "kind": "reasoning_delta",
+            "thread": thread,
+            "id": sid,
+            "text": text,
+        }
+        if round:
+            reasoning["round"] = round
+        self.bus.publish(reasoning)
+
+    def on_tool_delta(self, tool: dict[str, Any], round: str = "") -> None:
+        """A step of a run relayed from another device (contract C13 §4): the tool it called
+        or what came back, on the round's stream. The bus frame is ``tool_delta``; the Web
+        app appends it to the same bubble its text is filling, so a step never replaces it."""
+        name = str(tool.get("name") or "").strip()
+        if not name:
+            return
+        thread = self.thread()
+        key = _stream_key(thread, round)
+        sid = self._stream_ids.get(key)
+        if sid is None:
+            sid = new_id("a")
+            self._stream_ids[key] = sid
+            self._stream_buf[key] = ""
+            start: dict[str, Any] = {
+                "kind": "stream_start",
+                "thread": thread,
+                "id": sid,
+                "ts": now_iso(),
+            }
+            if round:
+                start["round"] = round
+            self.bus.publish(start)
+        row = {
+            "name": name,
+            "stage": "result" if tool.get("stage") == "result" else "call",
+            "summary": str(tool.get("summary") or ""),
+            "ok": tool.get("ok") is not False,
+        }
+        msg: dict[str, Any] = {"kind": "tool_delta", "thread": thread, "id": sid, "tool": row}
+        if round:
+            msg["round"] = round
+        self.bus.publish(msg)
+
+    def on_stream_end(self, round: str = "", discard: bool = False) -> None:
+        """A relayed round is over (``done`` in the frame, contract C13 §4): its bubble
+        closes. Nothing local defines that stream, so it is closed by the round it opened
+        under rather than by an assistant event."""
+        thread = self.thread()
+        key = _stream_key(thread, round)
+        sid = self._stream_ids.pop(key, None)
+        self._stream_buf.pop(key, None)
+        if sid is None:
+            return
+        end: dict[str, Any] = {"kind": "stream_end", "thread": thread, "id": sid}
+        if round:
+            end["round"] = round
+        if discard:
+            end["discard"] = True
+        self.bus.publish(end)
 
     def on_assistant_message(self, content: str | None, reasoning: str | None) -> None:
         thread = self.thread()

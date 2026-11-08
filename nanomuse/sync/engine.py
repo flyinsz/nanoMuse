@@ -69,6 +69,7 @@ from nanomuse.cloud import CloudError
 from nanomuse.logger import logger
 from nanomuse.schema import Message
 from nanomuse.server.events import MAIN_THREAD, now_iso
+from nanomuse.server.webui import current_thread
 from nanomuse.sync.client import SyncClient
 
 if TYPE_CHECKING:
@@ -632,11 +633,15 @@ class ConversationSync:
 
     def on_frame(self, frame: dict[str, Any]) -> None:
         """The hub says another device pushed: pull when our cursor is behind. Or (C9) that
-        a turn started or ended there: the presence map and the web app hear it."""
+        a turn started or ended there: the presence map and the web app hear it. Or (C13 §4)
+        a batch of that turn's live output: this device's web app draws it."""
         if str(frame.get("from") or "") == self.svc.hub.device_id:
             return
         if frame.get("type") == "working":
             self._apply_working(frame)
+            return
+        if frame.get("type") == "stream":
+            self._apply_stream(frame)
             return
         if int(frame.get("cursor") or 0) > self.cursor and self.active:
             self.pull_soon()
@@ -679,6 +684,55 @@ class ConversationSync:
                 "at": at,
             }
         )
+
+    def _apply_stream(self, frame: dict[str, Any]) -> None:
+        """Contract C13 §4: a batch of another device's live run, fed to *this* device's web
+        app so it draws the turn while it happens — the reverse of what :meth:`_relay_run`
+        does for a caller. Filtered exactly as :meth:`_apply_working`: this device's own
+        echo, a frame with no conversation, one whose conversation is not held here, and
+        one whose thread is not a synced one are all dropped — nothing is drawn on a chat
+        this device does not have, or that is not the account's.
+
+        The pieces go to the web app's own streaming entry points (``on_text_delta`` /
+        ``on_reasoning_delta`` / ``on_tool_delta`` / ``on_stream_end``), with the frame's
+        ``round``, so the Web app buckets this stream by conversation *and* round (a local
+        run in the same conversation keeps its own bucket). Those entry points read the
+        thread from a contextvar (``server/webui.py``), so it is set to the target thread
+        around the call and reset after: a relayed frame lands on its own conversation,
+        never on whatever thread the hub's reader task happened to be in."""
+        cid = str(frame.get("cid") or "")
+        if not cid:
+            return
+        thread = self.thread_of(cid)
+        if thread is None or not self._eligible(thread):
+            return
+        ui = self.svc.ui
+        # ``on_tool_delta`` exists only on the web app's UI; it, and the round-aware
+        # ``on_text_delta`` / ``on_reasoning_delta`` beside it, arrived together. A UI that
+        # has none of them (a console, a headless one) shows nothing for a relayed stream
+        # rather than being called with an argument it does not take.
+        if not hasattr(ui, "on_tool_delta"):
+            return
+        round_id = str(frame.get("round") or "")
+        delta = str(frame.get("delta") or "")
+        reasoning = str(frame.get("reasoning") or "")
+        tool = frame.get("tool")
+
+        def feed() -> None:
+            if delta:
+                ui.on_text_delta(delta, round_id)
+            if reasoning:
+                ui.on_reasoning_delta(reasoning, round_id)
+            if isinstance(tool, dict):
+                ui.on_tool_delta(tool, round_id)
+            if frame.get("done"):
+                ui.on_stream_end(round_id)
+
+        token = current_thread.set(thread.id)
+        try:
+            feed()
+        finally:
+            current_thread.reset(token)
 
     def _clear_working(self, cid: str, device: str) -> None:
         """The reply from that device arrived: its line goes."""
