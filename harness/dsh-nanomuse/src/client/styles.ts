@@ -404,6 +404,19 @@ html[data-nm-muse][data-nm-side] [data-slot="conversation.session.header"] [clas
 html[data-nm-muse] [data-slot="conversation.session.header"] [class*="_headerActions"] { display: none; }
 html[data-nm-muse] [data-slot="conversation.session.header"] [class*="_titleRow"] { justify-content: flex-end; }
 html[data-nm-muse][data-nm-side] [data-slot="conversation.session.header"] [class*="_titleRow"] { justify-content: space-between; }
+/* The title starts clear of the disc that goes back to the main chat. That disc is drawn by
+   MuseHeader and is positioned out of the flow (left 14px, 30px wide, so it spans 14-44 within
+   the chat's header), which means it occupies nothing in the header's grid column; the harness's
+   title row is column 2 and began at the very left edge, under the disc. Two translucent layers
+   stacked read as a darker patch behind the arrow, which is what a side chat showed.
+   The row's own leading inset is what has to grow: the header already pads 20px, so a floor of
+   40px puts the title at 60px, a gap clear of the disc's right edge. max() rather than a plain
+   value on purpose — the frame publishes the same variable for its own leading seat (160px while
+   the host sidebar is collapsed) and the harness subtracts the same 20px, so its value must keep
+   winning when it is the larger one; replacing it outright would slide the title back under that
+   seat. Beside a room the disc carries the word "Chats" and is ~76px wide, hence the wider floor. */
+html[data-nm-muse][data-nm-side] [data-slot="conversation.session.header"] [class*="_titleRow"] { padding-inline-start: max(40px, calc(var(--dsh-frame-leading-clearance, 0px) - 20px)); }
+html[data-nm-muse][data-nm-split] [data-slot="conversation.session.header"] [class*="_titleRow"] { padding-inline-start: max(88px, calc(var(--dsh-frame-leading-clearance, 0px) - 20px)); }
 html[data-nm-muse] [data-slot="conversation.session.header"] [data-conversation-tabs] { display: none; }
 /* …except while another view (the trajectory a tool row's "Inspect" opens) is up: then the
    tabs come back as the way out — a small segmented control, "Chat" first, at the top right
