@@ -142,6 +142,7 @@ export function renderStreamBubbles(t: Translate): () => void {
         for (const node of nodes.values()) node.remove()
         continue
       }
+      const flow = content.querySelector<HTMLElement>('[data-chat-flow]')
       const scroll = content.querySelector<HTMLElement>('[data-conversation-scroll]')
       const seat = seatOf(content)
       // The oldest first, so the newest batch sits nearest the composer, after the one before it.
@@ -156,9 +157,12 @@ export function renderStreamBubbles(t: Translate): () => void {
           // the order the rounds started in; only moved when it is not already there
           if (tail.nextElementSibling !== node) tail.insertAdjacentElement('afterend', node)
         } else if (!node.isConnected) {
-          // the newest of them sits just above the composer, the seat the other devices' landed
-          // bubbles use; the end of the scrolling body when this chat has no seat to speak of
-          if (seat) seat.insertAdjacentElement('beforebegin', node)
+          // Into the chat's own message flow, where the landed turns are: that container carries
+          // the thread's width and centring, so a running turn lines up with the answers above it
+          // instead of hugging the edge of the scroller. The seat above the composer is the
+          // fallback for a chat with no flow of its own, and the scroller the last resort.
+          if (flow) flow.append(node)
+          else if (seat) seat.insertAdjacentElement('beforebegin', node)
           else if (scroll) scroll.append(node)
           else content.append(node)
         }

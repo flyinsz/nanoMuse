@@ -1491,7 +1491,10 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
    wears the harness's own shapes rather than a look of its own: the same left-aligned, unbordered
    body a settled answer has, so a running turn does not read as a different kind of thing that
    disappears when it finishes. */
-.nm-stream { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; align-items: stretch; }
+/* Laid out like the landed turns: the chat's own flow gives it the thread's width and centring,
+   and this is the same box the remote bubbles wear so the two line up whether or not a flow
+   container was found. */
+.nm-stream { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; box-sizing: border-box; width: min(var(--dsh-chat-content-width, 680px), 100%); padding: 0 var(--dsh-composer-side-clearance, 16px); }
 /* the turn's own order: a run of prose, a step, the prose after it */
 .nm-stream-flow { display: flex; flex-direction: column; }
 .nm-stream-flow > * + * { margin-top: 6px; }
