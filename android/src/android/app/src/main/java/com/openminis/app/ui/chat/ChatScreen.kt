@@ -4159,6 +4159,13 @@ fun ChatScreen(
                             io.github.nanomuse.ui.chat.NmWorkingLine(viewModel.realSessionId.ifEmpty { sessionId }, nmLastId)
                         }
                     }
+                    // nanoMuse: a turn running on another device, drawn as it is written (C13, §4):
+                    // its words and each step where it happened. One item for all of them, so the
+                    // chat's own list is not rebuilt per batch; the bubbles follow the account's
+                    // state and go when their turn settles.
+                    item(key = "__nm_stream__", contentType = "nm_stream") {
+                        io.github.nanomuse.ui.chat.NmStreamBubbles(viewModel.realSessionId.ifEmpty { sessionId })
+                    }
                     if (canResume && !isStreaming && error == null && !lastAssistantHasError && nmContinueAsk == null && !nmRemoteTail) {
                         item(key = "__resume_banner__", contentType = "resume_banner") {
                             ResumeBanner(onResume = {
@@ -5634,6 +5641,7 @@ fun ChatScreen(
                 io.github.nanomuse.ui.chat.nmDeviceExecutorLine(
                     aimedHubId = nmFaces,
                     muses = nmMuses,
+                    sessionId = viewModel.realSessionId.ifEmpty { sessionId },
                     modifier = Modifier.padding(horizontal = nmComposerHorizontalInset),
                 )
                 io.github.nanomuse.ui.chat.nmDeviceFaces(

@@ -100,6 +100,21 @@ object ConversationSync {
     /** Local chat id → the device working on it right now (C9), while its `at` is under ten minutes old. */
     val working: StateFlow<Map<String, WorkingPresence>> = _working.asStateFlow()
 
+    private val _streams = MutableStateFlow<Map<String, StreamBuckets.StreamBucket>>(emptyMap())
+    /**
+     * A turn running on another device of the account, in batches (contract C13, §4): the frames
+     * the relay fans out, merged by conversation and round. Empty on a relay or a device that
+     * does not speak the frame, which is every one of them until the change that added it.
+     *
+     * Kept here rather than in the chat: it is the account's, it survives leaving the screen, and
+     * the merge is a pure function ([StreamBuckets.apply]) so what a bubble holds is checked
+     * without a renderer.
+     */
+    val streams: StateFlow<Map<String, StreamBuckets.StreamBucket>> = _streams.asStateFlow()
+
+    /** Relay conversation id → the local chat it is here, for the rounds being drawn. */
+    private val _streamChats = MutableStateFlow<Map<String, String>>(emptyMap())
+
     private val _hidden = MutableStateFlow<Set<String>>(emptySet())
     /**
      * Local chat ids that are not the signed-in account's: synced under another account
@@ -350,6 +365,42 @@ object ConversationSync {
                 }
             }
         }
+    }
+
+    /**
+     * The hub's `{"type": "stream", "cid", "from", "round", "seq", …}` (contract C13, §4): a batch
+     * of a turn running on another device — its words, its reasoning, or one step.
+     *
+     * The merge is [StreamBuckets.apply], which is a pure function of what was held and the frame,
+     * so nothing here decides what a bubble says. The frame is dropped when this phone sent it
+     * (the relay does not echo a sender, but a reconnection can leave a bucket naming it), and a
+     * `cid` this phone has no chat for is dropped too: a turn is drawn in the conversation it
+     * runs in, and one for a chat this account does not show here has nowhere to go.
+     */
+    fun onStreamFrame(context: Context, frame: JSONObject) {
+        val ctx = context.applicationContext
+        val parsed = StreamBuckets.read(frame) ?: return
+        if (parsed.from.isNotBlank() && parsed.from == Hub.deviceId(ctx)) return
+        scope.launch {
+            val sessionId = runCatching { RoomSyncStore(ctx).conversationByCid(parsed.cid)?.sessionId }
+                .getOrNull() ?: return@launch
+            if (sessionId in _hidden.value) return@launch // C10: another account's chat is not on this screen
+            // Held by `cid` and `round`, the way the relay names a round, so two turns in one chat
+            // never write over each other; the chat a round belongs to is remembered here, once
+            // per frame, so drawing does not go back to the store for every bubble.
+            _streamChats.update { it + (parsed.cid to sessionId) }
+            _streams.update { map -> StreamBuckets.prune(StreamBuckets.apply(map, parsed)) }
+        }
+    }
+
+    /** The rounds running in one local chat right now, newest first: what the chat draws. */
+    fun streamsFor(sessionId: String, now: Long = System.currentTimeMillis()): List<StreamBuckets.StreamBucket> {
+        val chats = _streamChats.value
+        val rounds: List<StreamBuckets.StreamBucket> = _streams.value.values
+            .filter { chats[it.cid] == sessionId }
+            .filter { it.round.isNotEmpty() && it.drawable }
+            .filter { now - it.at < if (it.done) StreamBuckets.STREAM_GRACE_MS else StreamBuckets.STREAM_QUIET_MS }
+        return rounds.sortedWith(compareByDescending<StreamBuckets.StreamBucket> { it.at }.thenBy { it.round })
     }
 
     /** `GET /v1/sync/state` lists who is working: what the hub said while this phone was away. */

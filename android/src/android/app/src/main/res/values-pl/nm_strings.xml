@@ -1256,4 +1256,6 @@
     <string name="nm_device_executor">Run by %1$s</string>
     <string name="nm_device_executor_self">Run by this device</string>
     <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
+    <string name="nm_device_executor_working">%1$s pracuje nad tym: %2$s</string>
+    <string name="nm_stream_step">%1$s · %2$s</string>
 </resources>

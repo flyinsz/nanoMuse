@@ -111,6 +111,7 @@ object Hub {
             onProfile = { frame -> io.github.nanomuse.cloud.ProfileSync.onFrame(app, frame) },
             onSync = { frame -> io.github.nanomuse.sync.ConversationSync.onFrame(app, frame) },
             onWorking = { frame -> io.github.nanomuse.sync.ConversationSync.onWorkingFrame(app, frame) },
+            onStream = { frame -> io.github.nanomuse.sync.ConversationSync.onStreamFrame(app, frame) },
             onPush = { frame -> ComputerCards.onPush(app, frame) },
         )
         client = c

@@ -117,6 +117,8 @@ class HubClient(
     private val onSync: (JSONObject) -> Unit = {},
     /** a turn started or ended on another device: `{"type": "working", "cid", "from", "device_name", "working", "at"}` (contract C9) */
     private val onWorking: (JSONObject) -> Unit = {},
+    /** a batch of a turn running on another device: `{"type": "stream", "cid", "from", "round", "seq", "delta"?, "reasoning"?, "tool"?, "done"}` (contract C13, §4) */
+    private val onStream: (JSONObject) -> Unit = {},
     /** an event with no call behind it (relay 0.31): a computer's own approval card, or the word that it was answered */
     private val onPush: (JSONObject) -> Unit = {},
 ) {
@@ -271,6 +273,9 @@ class HubClient(
             "profile" -> runCatching { onProfile(frame) }
             "sync" -> runCatching { onSync(frame) }
             "working" -> runCatching { onWorking(frame) }
+            // a turn running elsewhere, in batches (C13 §4). An older build has no such case and
+            // this `when` has no `else`, so a relay that speaks it costs an old app nothing.
+            "stream" -> runCatching { onStream(frame) }
             "call" -> {
                 val call = IncomingCall(
                     id = frame.optString("id"),

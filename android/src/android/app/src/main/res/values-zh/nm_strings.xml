@@ -1222,4 +1222,7 @@
     <string name="nm_device_executor">由 %1$s 执行</string>
     <string name="nm_device_executor_self">由本机执行</string>
     <string name="nm_device_executor_offline">%1$s 离线，这条不会发出</string>
+    <!-- 另一台设备正在跑的一轮，随批次到达（C13，第四节）。头部那行说这条会话归谁、现在走到哪一步。 -->
+    <string name="nm_device_executor_working">%1$s 正在处理：%2$s</string>
+    <string name="nm_stream_step">%1$s · %2$s</string>
 </resources>

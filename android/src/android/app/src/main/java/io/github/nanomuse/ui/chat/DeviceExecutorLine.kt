@@ -12,6 +12,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openminis.app.R
 import io.github.nanomuse.reach.Computers
+import io.github.nanomuse.sync.ConversationSync
 import io.github.nanomuse.terminal.DeviceExecutor
 
 /**
@@ -50,16 +53,30 @@ import io.github.nanomuse.terminal.DeviceExecutor
 fun nmDeviceExecutorLine(
     aimedHubId: String,
     muses: List<Computers.Computer>,
+    sessionId: String = "",
     modifier: Modifier = Modifier,
 ) {
     val target = remember(aimedHubId, muses) { DeviceExecutor.of(aimedHubId, muses) }
     if (!DeviceExecutor.visible(target, muses)) return
     val owner = (target as? DeviceExecutor.Target.Device)?.let { t -> muses.firstOrNull { it.hubId == t.id } }
-    val label = when (target) {
-        is DeviceExecutor.Target.Local -> stringResource(R.string.nm_device_executor_self)
-        is DeviceExecutor.Target.Device ->
+    // A turn running on that device right now (C13, §4): the same line says what it is on, the way
+    // the desktop's header does — while the person waits on a machine elsewhere, what this phone
+    // would do with the sentence is not the thing worth saying.
+    val stream by ConversationSync.streams.collectAsState()
+    val running = remember(stream, sessionId) {
+        if (sessionId.isEmpty()) null
+        else ConversationSync.streamsFor(sessionId).lastOrNull()
+    }
+    val label = when {
+        running != null && target is DeviceExecutor.Target.Device -> {
+            val step = running.tools.lastOrNull()?.line ?: running.text.trim().lineSequence().lastOrNull()?.take(60).orEmpty()
+            stringResource(R.string.nm_device_executor_working, target.name, step)
+        }
+        target is DeviceExecutor.Target.Local -> stringResource(R.string.nm_device_executor_self)
+        target is DeviceExecutor.Target.Device ->
             if (target.online) stringResource(R.string.nm_device_executor, target.name)
             else stringResource(R.string.nm_device_executor_offline, target.name)
+        else -> return
     }
     Row(
         modifier = modifier.fillMaxWidth().padding(vertical = 2.dp),

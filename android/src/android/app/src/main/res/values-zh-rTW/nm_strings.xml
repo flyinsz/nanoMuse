@@ -1215,4 +1215,6 @@
     <string name="nm_device_executor">由 %1$s 執行</string>
     <string name="nm_device_executor_self">由本機執行</string>
     <string name="nm_device_executor_offline">%1$s 離線，這條不會發出</string>
+    <string name="nm_device_executor_working">%1$s 正在處理：%2$s</string>
+    <string name="nm_stream_step">%1$s · %2$s</string>
 </resources>

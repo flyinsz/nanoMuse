@@ -1234,4 +1234,9 @@
     <string name="nm_device_executor">Run by %1$s</string>
     <string name="nm_device_executor_self">Run by this device</string>
     <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
+    <!-- A turn running on another device, as its batches arrive (C13, §4). The header line says
+         who has the chat and what step it is on; the step rows below it are the turns themselves
+         being written, and the caption names the device whose turn a bubble is. -->
+    <string name="nm_device_executor_working">%1$s is on it: %2$s</string>
+    <string name="nm_stream_step">%1$s \u00b7 %2$s</string>
 </resources>
