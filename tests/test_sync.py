@@ -405,7 +405,10 @@ def test_a_finished_turn_is_pushed_as_the_main_conversation(synced) -> None:
     assert service.sync.cid_of(MAIN_THREAD) == main["cid"]
     before = len(relay.pushes)
     client.portal.call(service.sync.push)  # type: ignore[union-attr]
-    assert len(relay.pushes) == before
+    # Nothing goes up again: no message is sent twice. A conversation body may still ride along
+    # while the relay has not confirmed this device as its owner (C13) — that is a claim about
+    # the conversation, not the turn, and it carries no messages.
+    assert all(not p["messages"] for p in relay.pushes[before:])
     # sync.json remembers the cid; the cursor catches up on the pull that follows a push
     state = service.sync.state
     assert state["cids"][MAIN_THREAD] == main["cid"]

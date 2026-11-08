@@ -284,6 +284,22 @@ class ConversationSync:
         """The account a conversation was synced with, "" when none (never synced)."""
         return str(self.state["owners"].get(thread_id) or "")
 
+    def device_owner_of(self, thread_id: str) -> str:
+        """The device holding a conversation's context (C13), "" before the relay has said."""
+        return str(self.state["device_owners"].get(thread_id) or "")
+
+    def _note_device_owner(self, thread_id: str, device: str) -> None:
+        """Record the relay's word on a conversation's owner (C13, impl §A).
+
+        The relay is the authority: what this device last sent says only what it asked for, and
+        the relay may decline a push whose row it already holds newer. Taking the reply is also
+        how a move made on another device (`@Desk` from the phone) reaches this one.
+        """
+        if not thread_id or self.device_owner_of(thread_id) == device:
+            return
+        self.state["device_owners"][thread_id] = device
+        self._save()
+
     def visible(self, thread: Thread) -> bool:
         """Shown in the list (C10): signed in, the current account's and the ownerless ones;
         signed out, everything. Another account's main chat (``main_of``) is that account's."""
@@ -1239,15 +1255,24 @@ class ConversationSync:
                 if not self._eligible(thread):
                     continue
                 cid = self._cid_for(thread)
-                owner = self.state["device_owners"].get(thread.id, "")
-                if self.state["titles"].get(thread.id) != thread.title or owner != device:
+                # C13: the owner goes up whenever the relay has not confirmed this device as
+                # the holder. `self.state["device_owners"]` holds the relay's word (see
+                # `_note_device_owner`), so an empty value means "not confirmed", not "not sent".
+                owner_changed = self.device_owner_of(thread.id) != device
+                if self.state["titles"].get(thread.id) != thread.title or owner_changed:
+                    # An owner that has not been told yet goes up with a fresh `updated_at`: the
+                    # relay only rewrites a row whose `updated_at` is not older than the one it
+                    # holds, so an unchanged timestamp would leave the owner unrecorded forever.
+                    stamp = _unix(thread.updated_at)
+                    if owner_changed:
+                        stamp = max(stamp, int(time.time()))
                     conversations.append(
                         {
                             "cid": cid,
                             "kind": "main" if thread.id == MAIN_THREAD else "side",
                             "title": thread.title,
                             "created_at": _unix(thread.created_at),
-                            "updated_at": _unix(thread.updated_at),
+                            "updated_at": stamp,
                             # C13 / impl §A: the device holding this conversation's full context.
                             # This engine holds it for every thread it pushes (`_eligible` keeps
                             # other devices' threads out), so it is the owner. On the wire because
@@ -1302,7 +1327,6 @@ class ConversationSync:
                     for tid, cid in self.state["cids"].items():
                         if cid == c["cid"]:
                             self.state["titles"][tid] = c["title"]
-                            self.state["device_owners"][tid] = str(c.get("owner_device") or "")
             self._save()
             if len(messages) < BATCH and not redirect:
                 break
@@ -1389,6 +1413,13 @@ class ConversationSync:
         if thread is not None and not self._mine(thread):
             # another account's conversation happens to carry this id: not ours to touch
             return
+        # C13 (impl §A): the relay's word on this conversation's owner, taken as the truth about
+        # it. Local state records only what was *sent*, and a push the relay declined (its row's
+        # `updated_at` was newer) would leave the two disagreeing for good — so the reply wins and
+        # the local record is brought in line, which is also what makes a move made on another
+        # device (`@Desk` there) show up here.
+        if thread is not None:
+            self._note_device_owner(thread.id, str(row.get("owner_device") or ""))
         if row.get("deleted"):
             if thread is None:
                 return
