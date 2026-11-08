@@ -100,6 +100,14 @@ object RemoteTaskController {
         language: String,
         onStep: (Step) -> Unit,
         stopFlag: () -> Boolean = { false },
+        /**
+         * The conversation to run on *that device* (C13, impl §D): one it already holds, so the
+         * round runs with its full context instead of in a fresh `From <name>`. Blank keeps the
+         * old behaviour — a chat is opened for the caller — which is what a caller with nothing
+         * to hand over sends. `handoff` goes with it: the round is someone else's, so the device
+         * marks it as such rather than treating the sentence as its own person's.
+         */
+        thread: String = "",
     ): Outcome {
         // Contract C13, "owner 离线不发" (docs/session-handoff.md §3): a device the relay has
         // already marked away is not sent to at all. The hub would answer `device_offline` after a
@@ -119,6 +127,15 @@ object RemoteTaskController {
             .put("from", Hub.name(context))
             .put("stream", true)
             .apply { if (language.isNotBlank()) put("language", language) }
+            // C13 (impl §D): run this round on the conversation named, with its full context, and
+            // say that the round is the caller's. A target that does not know the field ignores
+            // it and opens a chat instead, which is the behaviour every older client gets.
+            .apply {
+                if (thread.isNotBlank()) {
+                    put("thread", thread)
+                    put("handoff", true)
+                }
+            }
 
         // The questions of this run in flight: the target's `approval_id` → the id the card
         // here carries. Per call, not per object: two runs at once (two chats, a second run

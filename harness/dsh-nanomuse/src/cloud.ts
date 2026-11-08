@@ -3525,7 +3525,18 @@ export default class NanomuseCloud extends Service {
       const body = await this.hub.call(
         d.id,
         'task',
-        { text: asked, from: this.deviceName(), conversation: d.id, stream: true },
+        {
+          text: asked,
+          from: this.deviceName(),
+          conversation: d.id,
+          stream: true,
+          // C13 (impl §D) / `docs/session-handoff.md` §3: that device runs the round on its own
+          // main conversation, with its full context, rather than in a fresh chat opened for us.
+          // This is what lets a chat with its Muse carry on where that conversation left off.
+          // A target that does not know the field ignores it (older clients keep working).
+          thread: 'main',
+          handoff: true,
+        },
         { timeoutMs: DEVICE_TASK_TIMEOUT_MS, onEvent },
       )
       const answer = String(body.text ?? body.answer ?? '').trim()

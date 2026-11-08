@@ -27,6 +27,14 @@ import io.github.nanomuse.reach.Computers
 object DeviceChat {
     private const val PREFS = "nanomuse"
 
+    /**
+     * The runtime's own name for a device's main conversation (`nanomuse/server/events.py`'s
+     * `MAIN_THREAD`). It is what a `task` names to run on that device's main chat — the
+     * conversation whose full context is the one a chat with its Muse is meant to continue
+     * (contract C13, impl §D). Every device calls its own main conversation by this id.
+     */
+    const val MAIN_THREAD = "main"
+
     /** The conversation this phone keeps with [hubId], named the way the relay names it. */
     fun conversationOf(hubId: String): String = "to-" + hubId
 

@@ -6648,6 +6648,12 @@ class ChatViewModel(
                     text = asked,
                     sessionId = targetSid,
                     language = nmUiLanguage(),
+                    // C13 (impl §D) and `docs/session-handoff.md` §3: that device runs the round on
+                    // its own main conversation, with its full context, rather than in a fresh chat
+                    // opened for us — "owner 打开的是它自己那条会话（主会话就是 `main`）". This is
+                    // what makes a chat with it a way to carry on where it left off; without it the
+                    // words arrive with no memory of the conversation they belong to.
+                    thread = io.github.nanomuse.terminal.DeviceChat.MAIN_THREAD,
                     onStep = { step ->
                         val line = when (step) {
                             is io.github.nanomuse.terminal.RemoteTaskController.Step.Running -> step.text
