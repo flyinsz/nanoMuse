@@ -22,6 +22,11 @@ data class RemoteConversation(
     val updatedAt: Long,
     val deleted: Boolean,
     val seq: Long,
+    /**
+     * The device holding this conversation's context (C13, impl §A): the relay's `owner_device`.
+     * Empty on a relay that predates the column, or a row pushed before it existed.
+     */
+    val ownerDevice: String = "",
 )
 
 /** One message as the relay lists it. */
@@ -84,6 +89,8 @@ data class OutConversation(
     val createdAt: Long,
     val updatedAt: Long,
     val deleted: Boolean = false,
+    /** The device holding the context (C13, impl §A); empty lets the relay keep what it has. */
+    val ownerDevice: String = "",
 )
 
 /** A message as this device posts it; `deleted` makes it a tombstone for a known `mid`. */

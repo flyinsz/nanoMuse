@@ -169,6 +169,9 @@ class ConversationSync:
             "side_chats": bool(svc.settings.sync.side_chats),
             "cids": {},  # thread id → cid
             "titles": {},  # thread id → the title last pushed
+            # C13: thread id → the device id last pushed as this conversation's owner, so a
+            # push goes out when the owner moves (`@Desk`) and stays quiet when it has not.
+            "device_owners": {},
             # C10: thread id → the account (`account.id`) it was synced with; absent = none
             "owners": {},
             # C10: account id → the thread that holds that account's main chat while another
@@ -224,7 +227,7 @@ class ConversationSync:
             for key in ("account_id", "cursor", "enabled", "side_chats"):
                 if key in data:
                     self.state[key] = data[key]
-            for key in ("cids", "titles", "owners", "mains"):
+            for key in ("cids", "titles", "owners", "mains", "device_owners"):
                 if isinstance(data.get(key), dict):
                     self.state[key] = {str(k): str(v) for k, v in data[key].items()}
 
@@ -1236,7 +1239,8 @@ class ConversationSync:
                 if not self._eligible(thread):
                     continue
                 cid = self._cid_for(thread)
-                if self.state["titles"].get(thread.id) != thread.title:
+                owner = self.state["device_owners"].get(thread.id, "")
+                if self.state["titles"].get(thread.id) != thread.title or owner != device:
                     conversations.append(
                         {
                             "cid": cid,
@@ -1244,6 +1248,12 @@ class ConversationSync:
                             "title": thread.title,
                             "created_at": _unix(thread.created_at),
                             "updated_at": _unix(thread.updated_at),
+                            # C13 / impl §A: the device holding this conversation's full context.
+                            # This engine holds it for every thread it pushes (`_eligible` keeps
+                            # other devices' threads out), so it is the owner. On the wire because
+                            # the other devices read it back to know whose turn it is: a phone
+                            # that pulls this chat has no other way to learn where it belongs.
+                            "owner_device": device,
                         }
                     )
                 for ev, wire in self._unsynced(thread, cid):
@@ -1292,6 +1302,7 @@ class ConversationSync:
                     for tid, cid in self.state["cids"].items():
                         if cid == c["cid"]:
                             self.state["titles"][tid] = c["title"]
+                            self.state["device_owners"][tid] = str(c.get("owner_device") or "")
             self._save()
             if len(messages) < BATCH and not redirect:
                 break

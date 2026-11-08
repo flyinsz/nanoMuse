@@ -138,6 +138,11 @@ class SyncEngine(
                     pushedTitle = null,
                     pushed = false,
                     owner = account,
+                    // C13 (impl §A): a chat this phone mints is one this phone holds the context
+                    // of, so it introduces itself as the owner. The relay keeps the first word it
+                    // hears and never lets an empty one clear it, which is what makes the claim
+                    // safe to send on every new mapping.
+                    ownerDevice = deviceId,
                 )
                 store.putConversation(map)
             } else if (map.owner == null) {
@@ -183,7 +188,7 @@ class SyncEngine(
             val titleChanged = map.kind != "main" && map.pushedTitle != s.title
             val touched = msgs.any { it.cid == map.cid }
             if (!map.pushed || titleChanged || touched) {
-                convs += OutConversation(map.cid, map.kind, s.title, s.createdAt / 1000, s.updatedAt / 1000)
+                convs += OutConversation(map.cid, map.kind, s.title, s.createdAt / 1000, s.updatedAt / 1000, ownerDevice = map.ownerDevice)
                 titles[map.cid] = map to s.title
             }
         }
@@ -197,7 +202,7 @@ class SyncEngine(
                 continue
             }
             if (!map.deleted) store.putConversation(map.copy(deleted = true))
-            convs += OutConversation(map.cid, map.kind, map.pushedTitle, now() / 1000, now() / 1000, deleted = true)
+            convs += OutConversation(map.cid, map.kind, map.pushedTitle, now() / 1000, now() / 1000, deleted = true, ownerDevice = map.ownerDevice)
         }
 
         if (convs.isEmpty() && msgs.isEmpty()) return 0
@@ -327,6 +332,14 @@ class SyncEngine(
                 touched += s.id
                 renamed = true
             }
+            // C13: the relay's word on who holds this conversation, kept with it. A move
+            // (`@Desk`) changes the strip and where the next sentence goes, so the chat is
+            // marked touched and the screen redraws; it does not count as an applied change,
+            // which is what the echo test weighs — no message arrived and none did.
+            if (c.ownerDevice != known.ownerDevice) {
+                store.putConversation(known.copy(pushedTitle = c.title, ownerDevice = c.ownerDevice))
+                touched += s.id
+            }
             if (c.title != known.pushedTitle) store.putConversation(known.copy(pushedTitle = c.title))
             return renamed
         }
@@ -338,22 +351,22 @@ class SyncEngine(
                 val mine = store.conversation(mainId)
                 if (mine == null) {
                     // first sight of the account's main chat: ours is it from now on
-                    store.putConversation(SyncConversation(mainId, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account))
+                    store.putConversation(SyncConversation(mainId, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account, ownerDevice = c.ownerDevice))
                 } else if (mine.cid != c.cid) {
                     // the relay's main is not the one we minted: move under it, post ours again
                     rehome(mine, c.cid, c.device, c.deviceName)
-                    store.putConversation(store.conversation(mainId)!!.copy(pushedTitle = c.title))
+                    store.putConversation(store.conversation(mainId)!!.copy(pushedTitle = c.title, ownerDevice = c.ownerDevice))
                 }
                 touched += mainId
                 return true
             }
             val id = chats.createSession(c.title, c.createdAt * 1000, c.updatedAt * 1000, main = true)
-            store.putConversation(SyncConversation(id, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account))
+            store.putConversation(SyncConversation(id, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account, ownerDevice = c.ownerDevice))
             touched += id
             return true
         }
         val id = chats.createSession(c.title, c.createdAt * 1000, c.updatedAt * 1000, main = false)
-        store.putConversation(SyncConversation(id, c.cid, "side", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account))
+        store.putConversation(SyncConversation(id, c.cid, "side", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account, ownerDevice = c.ownerDevice))
         touched += id
         return true
     }

@@ -76,6 +76,7 @@ object SyncJson {
                     updatedAt = it.optLong("updated_at"),
                     deleted = it.optBoolean("deleted", false),
                     seq = it.optLong("seq"),
+                    ownerDevice = it.optString("owner_device"),
                 )
             }.filter { it.cid.isNotBlank() },
             messages = (0 until msgs.length()).mapNotNull { msgs.optJSONObject(it) }.map {
@@ -115,7 +116,11 @@ object SyncJson {
                     .put("title", c.title ?: JSONObject.NULL)
                     .put("created_at", c.createdAt)
                     .put("updated_at", c.updatedAt)
-                    .apply { if (c.deleted) put("deleted", true) },
+                    .apply { if (c.deleted) put("deleted", true) }
+                    // C13 (impl §A): who holds this conversation's context. Left out when this
+                    // phone has nothing to say, so a relay that already knows the owner keeps it
+                    // (its own rule: an empty owner never clears a real one).
+                    .apply { if (c.ownerDevice.isNotBlank()) put("owner_device", c.ownerDevice) },
             )
         }
         val msgs = JSONArray()

@@ -114,6 +114,9 @@ export interface WireConversation {
   updated_at: number
   deleted: boolean
   seq: number
+  /** C13 (impl §A): the device holding this conversation's context; '' on a relay that predates it. */
+  owner_device?: string
+  owner_device_name?: string
 }
 
 export interface WireMessage {
@@ -480,6 +483,13 @@ export interface KnownConversation {
   /** Unix seconds, the relay's clock. */
   createdAt: number
   updatedAt: number
+  /**
+   * The device holding this conversation's context (C13, impl §A): the relay's `owner_device`.
+   * This is the fact that says whose turn the next sentence is, and it is a fact about the
+   * conversation rather than about the last message (`docs/session-handoff.md` §2), so it is
+   * kept with the conversation. Empty on a relay that has not said.
+   */
+  ownerDevice: string
 }
 
 export interface SyncState {
@@ -1174,8 +1184,13 @@ export class SyncEngine {
         if (!info || !this.syncs(sessionId)) continue
         const cid = this.cidFor(sessionId)
         const title = info.title || 'New chat'
+        // C13 (impl §A): a chat this device pushes is one whose context it holds, so it goes up
+        // as the owner. The relay keeps the first word it heard and never lets an empty one clear
+        // a real owner, so a chat that belongs elsewhere is not taken away by a later push from
+        // here. Only a rename carries it, which is the same round that already speaks about the
+        // conversation — nothing is sent on its own account.
         if (this.state.titles[sessionId] !== title) {
-          conversations.push({ cid, kind: sessionId === this.state.mainSession ? 'main' : 'side', title, created_at: Math.floor(info.createdAt / 1000), updated_at: Math.floor(info.updatedAt / 1000) })
+          conversations.push({ cid, kind: sessionId === this.state.mainSession ? 'main' : 'side', title, created_at: Math.floor(info.createdAt / 1000), updated_at: Math.floor(info.updatedAt / 1000), owner_device: device })
         }
         const lines = await this.options.sessions.lines(sessionId)
         for (const line of lines) {
@@ -1247,6 +1262,9 @@ export class SyncEngine {
           deviceName: known?.deviceName ?? '',
           createdAt: known?.createdAt || Number(c.created_at),
           updatedAt: Math.max(known?.updatedAt ?? 0, Number(c.updated_at)),
+          // C13: what this round claimed, not a fresh guess — a push that carried no owner
+          // (`@Desk` moved the chat elsewhere) must not quietly re-own it here.
+          ownerDevice: String(c.owner_device ?? '') || known?.ownerDevice || '',
         }
       }
       await this.save()
@@ -1355,6 +1373,9 @@ export class SyncEngine {
       deviceName: known?.deviceName || c.device_name,
       createdAt: known?.createdAt || c.created_at,
       updatedAt: Math.max(known?.updatedAt ?? 0, c.updated_at),
+      // C13: the relay's word on who holds it, taken as it comes. A relay that never says
+      // leaves it empty and nothing shows, which is how this looked before the field existed.
+      ownerDevice: c.owner_device || known?.ownerDevice || '',
     }
     if (!sessionId) {
       if (c.kind === 'main' && this.state.mainSession) {
