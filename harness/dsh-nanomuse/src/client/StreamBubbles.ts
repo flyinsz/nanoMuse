@@ -36,13 +36,20 @@ function seatOf(content: HTMLElement): HTMLElement | null {
   return content.querySelector<HTMLElement>('[data-conversation-scroll] > [data-composer-seat]')
 }
 
-/** One bubble: the agent's side of the thread, since a run from elsewhere is a reply being written. */
+/**
+ * One bubble: the agent's side of the thread, since a run from elsewhere is a reply being written.
+ *
+ * No caption of its own. A settled turn from another device already wears the harness's own quiet
+ * `From <device>` line (`nm-remote-from`) and the run's progress reads on the harness's own
+ * `nm-remote-working` line, both put there by `RemoteBubbles`; a second, differently-sized label
+ * here was a banner in a chat that had none. This is the words alone, in the shape the words
+ * will have when the turn settles.
+ */
 function bubble(t: Translate, stream: LiveStream, deviceName: string): HTMLElement {
-  const root = el('div', 'nm-stream')
+  const root = el('div', 'nm-stream nm-remote-assistant')
   root.setAttribute(KEY, `${stream.cid}\u0000${stream.round}`)
   root.setAttribute(CID, stream.cid)
   root.setAttribute(ROUND, stream.round)
-  root.append(el('div', 'nm-stream-head', t('stFrom', { device: deviceName || stream.from || t('otherDevice') })))
   root.append(el('div', 'nm-stream-body', stream.text))
   return root
 }
@@ -50,20 +57,14 @@ function bubble(t: Translate, stream: LiveStream, deviceName: string): HTMLEleme
 /** Redraw one bubble's words from its bucket; nodes are reused so nothing flashes between batches. */
 function paint(root: HTMLElement, stream: LiveStream, t: Translate): void {
   root.classList.toggle('nm-stream-done', stream.done)
-  // The device may have been renamed on the account since the round opened: the line follows it.
-  const head = root.querySelector<HTMLElement>('.nm-stream-head')
-  const words = t('stFrom', { device: stream.deviceName || stream.from || t('otherDevice') })
-  if (head && head.firstChild?.nodeType === Node.TEXT_NODE) {
-    if (head.firstChild.nodeValue !== words) head.firstChild.nodeValue = words
-  } else head?.insertAdjacentText('afterbegin', words)
   // The reasoning is a quieter line of its own above the words, as the harness folds it; it stays
   // as written (the final turn carries the fold, but until it lands this is all there is to read).
+  const body = root.querySelector<HTMLElement>('.nm-stream-body')
   const reasoning = root.querySelector<HTMLElement>('.nm-stream-reasoning')
   if (stream.reasoning.trim()) {
     if (reasoning) reasoning.textContent = stream.reasoning
-    else head?.insertAdjacentElement('afterend', el('div', 'nm-stream-reasoning', stream.reasoning))
+    else body?.insertAdjacentElement('beforebegin', el('div', 'nm-stream-reasoning', stream.reasoning))
   } else reasoning?.remove()
-  const body = root.querySelector<HTMLElement>('.nm-stream-body')
   if (body && body.textContent !== stream.text) body.textContent = stream.text
   // The steps, in the order they were reported: each row is the tool's own name and what it found.
   const rows = stream.tools.map((tool) => ({ line: toolLine(tool), bad: tool.stage === 'result' && !tool.ok }))
@@ -79,7 +80,7 @@ function paint(root: HTMLElement, stream: LiveStream, t: Translate): void {
   // The breathing light while the run goes; a finished round keeps its bubble but stops glowing.
   const light = root.querySelector<HTMLElement>('.nm-stream-live')
   if (stream.done) light?.remove()
-  else if (!light) head?.append(el('span', 'nm-stream-live'))
+  else if (!light) root.insertBefore(el('span', 'nm-stream-live'), root.firstChild)
 }
 
 /** Watch the document for running turns and draw them; returns the stop function. */

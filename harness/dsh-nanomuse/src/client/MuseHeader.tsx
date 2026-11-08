@@ -12,13 +12,13 @@ import { dismissStar, markStarred, nudgeText, openStar } from './AccountPage.tsx
 import type { Translate } from './api.ts'
 import { Avatar, motionStatus, type Mood } from './Avatar.tsx'
 import { describeCall } from './Capsule.tsx'
-import { useDeviceTask } from './device-task.ts'
 import { IconCheck, IconChevronLeft, IconHeart, IconMenu, IconSpinner } from './icons.tsx'
 import { useLive } from './live.ts'
 import { mainChatId } from './MuseChats.tsx'
 import { usePrefs } from './prefs.ts'
 import { statusWords } from './ProfileDrawer.tsx'
 import { activityOf, nav, useRooms } from './rooms.ts'
+import { toolLine } from './stream-view.ts'
 import { deviceIcon, executorText, useExecutorTarget } from './ExecutorLine.tsx'
 import { useWin } from './win.ts'
 
@@ -94,23 +94,26 @@ export function MuseHeader({ t, openProfile, useSessionStatus }: MuseHeaderProps
 
   const calls = live.hands.calls
   const hands = calls.length ? calls[calls.length - 1] : undefined
-  const task = useDeviceTask()
   const executor = useExecutorTarget(current)
-  // A run handed to another device (C13): the line under the name says which device has the
-  // chat and what it is doing there, in that device's own words, so the answer's arrival is
-  // never a surprise. It comes before the local run's steps: the person is waiting on a
-  // machine somewhere else, and this chat's own status has nothing to say about it.
-  const deviceRun = task.phase === 'asking' && (!task.sessionId || task.sessionId === current)
+  // A run under way on another device, as the relay's own frames report it (C13 §4). This is the
+  // live truth, not a guess: a turn started in the web console or on the server reaches every
+  // device as it is written, and the header says who has the chat and what step it is on, so the
+  // answer's arrival is never a surprise. It comes before this chat's own status: while the
+  // person waits on a machine elsewhere, what this computer is doing has nothing to say about it.
+  const deviceRun = current ? (live.streams ?? []).find((s) => s.session === current) : undefined
   let mood: Mood = 'idle'
   let line: ReactNode = null
   let tone = ''
   if (deviceRun) {
     mood = 'working'
     tone = 'nm-live'
-    const step = task.steps.length ? task.steps[task.steps.length - 1] : task.asked
-    line = executor.kind === 'device'
-      ? t('exWorking', { device: executor.name, step: step ?? '' })
-      : t('exWorking', { device: task.device, step: step ?? '' })
+    const step = deviceRun.tools.length
+      ? toolLine(deviceRun.tools[deviceRun.tools.length - 1]!)
+      : deviceRun.text.trim()
+        ? t('statusWriting')
+        : ''
+    const device = deviceRun.deviceName || deviceRun.from || t('otherDevice')
+    line = step ? t('exWorking', { device, step }) : t('statusWorking')
   } else if (waiting) {
     mood = 'waiting'
     tone = 'nm-wait'

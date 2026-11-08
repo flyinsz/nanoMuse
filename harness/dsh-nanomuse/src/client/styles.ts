@@ -1487,17 +1487,19 @@ html[data-nm-muse] [data-conversation-scroll]:has(> .nm-intro-host) [class*="_co
 
 /* ---- a turn being written on another device, as it lands (StreamBubbles.ts, C13 §4) ---- */
 /* The agent's side of the thread, like the landed turns of RemoteBubbles.ts, but growing: one
-   bubble per round, so two runs in one chat stand side by side rather than over each other. */
+   bubble per round, so two runs in one chat stand side by side rather than over each other. It
+   wears the harness's own shapes rather than a look of its own: the same left-aligned, unbordered
+   body a settled answer has, so a running turn does not read as a different kind of thing that
+   disappears when it finishes. */
 .nm-stream { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; align-items: flex-start; }
-.nm-stream-head { display: flex; align-items: center; gap: 6px; padding: 0 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 /* the round is on: the same slow breathing light as every other "something is going on" here */
-.nm-stream-live { width: 6px; height: 6px; border-radius: 50%; background: var(--nm-accent); flex: none; animation: nm-breathe-light 4.8s ease-in-out infinite; }
-.nm-stream-body { max-width: 100%; box-sizing: border-box; padding: 10px 16px; border-radius: 20px; background: var(--nm-agent-bubble); font-size: var(--dsh-content-font-size, 14px); line-height: calc(22px + var(--dsh-content-font-delta, 0px)); white-space: pre-wrap; word-break: break-word; color: var(--dsw-alias-label-primary); }
+.nm-stream-live { width: 6px; height: 6px; border-radius: 50%; background: var(--nm-accent); flex: none; margin: 0 0 2px 2px; animation: nm-breathe-light 4.8s ease-in-out infinite; }
+.nm-stream-body { max-width: 100%; box-sizing: border-box; font-size: var(--dsh-content-font-size, 14px); line-height: calc(22px + var(--dsh-content-font-delta, 0px)); white-space: pre-wrap; word-break: break-word; color: var(--dsw-alias-label-primary); }
 /* nothing written yet: the bubble is a plate, not an empty pill */
 .nm-stream-body:empty { display: none; }
 .nm-stream-reasoning { max-width: 100%; box-sizing: border-box; padding: 6px 12px; border-radius: 12px; border-left: 2px solid var(--nm-divider, var(--dsw-alias-border-l2)); background: var(--dsw-alias-bg-layer-2); font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); white-space: pre-wrap; word-break: break-word; }
-.nm-stream-steps { display: flex; flex-direction: column; gap: 5px; padding: 2px 4px; }
-.nm-stream-step { font-size: 12px; line-height: 1.45; color: var(--dsw-alias-label-secondary); word-break: break-word; }
+.nm-stream-steps { display: flex; flex-direction: column; gap: 5px; }
+.nm-stream-step { font-size: 12px; line-height: 1.45; color: var(--dsw-alias-label-tertiary); word-break: break-word; }
 .nm-stream-step-bad { color: var(--dsw-alias-state-error-primary, #d2453d); }
 @media (prefers-reduced-motion: reduce) { .nm-stream-live { animation: none; opacity: 1; } }
 `

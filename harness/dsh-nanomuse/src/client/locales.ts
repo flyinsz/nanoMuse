@@ -1560,8 +1560,6 @@ export const en = {
   exOffline: '{device} is offline, nothing will be sent',
   exSelf: 'Run by this computer',
   exWorking: '{device} is on it: {step}',
-  // a turn being written on another device, drawn while it lands (C13 §4)
-  stFrom: '{device} is writing',
 }
 
 export const zh: typeof en = {
@@ -3101,8 +3099,6 @@ export const zh: typeof en = {
   exOffline: '{device} 离线，这条不会发出',
   exSelf: '由本机执行',
   exWorking: '{device} 正在处理：{step}',
-  // a turn being written on another device, drawn while it lands (C13 §4)
-  stFrom: '{device} 正在写',
 }
 
 export type Words = keyof typeof en
