@@ -318,7 +318,7 @@ object ConversationSync {
     fun pullSoon(context: Context) {
         val ctx = context.applicationContext
         if (!active(ctx)) return
-        scope.launch { run(ctx) { applyPull(ctx, it.pull()) } }
+        scope.launch { run(ctx) { applyPull(it.pull()) } }
     }
 
     /** Launch and foreground: the others' changes first, then ours; who is working, from the relay's memory. */
@@ -327,7 +327,7 @@ object ConversationSync {
         if (!active(ctx)) return
         scope.launch {
             run(ctx) {
-                applyPull(ctx, it.pull())
+                applyPull(it.pull())
                 it.push()
                 runCatching { seedPresence(it, it.state().working) }
             }
@@ -433,7 +433,7 @@ object ConversationSync {
                 val state = runCatching { it.state() }.getOrNull()
                 if (state != null) setLocalEnabled(ctx, state.enabled)
                 if (_enabled.value) {
-                    applyPull(ctx, it.pull())
+                    applyPull(it.pull())
                     if (state != null) seedPresence(it, state.working)
                     it.push()
                 }
@@ -468,7 +468,7 @@ object ConversationSync {
         ticker = scope.launch {
             while (isActive) {
                 delay(PULL_EVERY_MS)
-                if (active(ctx)) run(ctx) { applyPull(ctx, it.pull()) }
+                if (active(ctx)) run(ctx) { applyPull(it.pull()) }
             }
         }
     }
@@ -511,7 +511,7 @@ object ConversationSync {
         scope.launch {
             run(ctx) {
                 it.sideChatsTurnedOn()
-                applyPull(ctx, it.pull())
+                applyPull(it.pull())
                 it.push()
             }
         }
@@ -576,45 +576,11 @@ object ConversationSync {
         }
     }
 
-    private fun applyPull(ctx: Context, r: PullResult) {
+    private fun applyPull(r: PullResult) {
         if (r.applied > 0) AppLogger.info(TAG, "pulled ${r.applied} change(s) up to ${r.cursor}" + if (r.skipped > 0) " (${r.skipped} older left on the relay)" else "")
         // the reply arrived: whoever was working on that chat is done (C9)
         if (r.replied.isNotEmpty()) _working.update { map -> map - r.replied }
-        if (r.touchedSessions.isNotEmpty()) {
-            // the relay's owner is read in a coroutine of its own: `applyPull` runs on the
-            // sync's own path and the store is a database, not something to block it on
-            scope.launch { adoptOwners(ctx, r.touchedSessions) }
-            _pulled.tryEmit(r.touchedSessions)
-        }
-    }
-
-    /**
-     * Take the relay's word on who holds each touched chat (C13, impl §A) into [DeviceAim],
-     * which is what the strip and the executor line read. The design is explicit that the owner
-     * is a fact about *the conversation* — not about where the last message came from
-     * (`docs/session-handoff.md` §2) — so a chat the NAS has been running comes back held by the
-     * NAS and the next plain sentence goes there, exactly as if it had been aimed by hand.
-     *
-     * A device the account no longer lists is kept as it is: [DeviceExecutor.of] already resolves
-     * an unknown id to this phone, and clearing the record would also erase an aim the person
-     * made towards a device that is merely asleep.
-     */
-    private suspend fun adoptOwners(ctx: Context, sessions: Collection<String>) {
-        for (sessionId in sessions) {
-            val device = runCatching { RoomSyncStore(ctx).conversation(sessionId)?.ownerDevice }.getOrNull() ?: continue
-            if (device.isBlank()) continue
-            if (device == Hub.deviceId(ctx)) {
-                // the relay says this phone holds it: a local chat is local, and an aim at
-                // another device would be a leftover from before this word arrived
-                if (io.github.nanomuse.terminal.DeviceAim.id(ctx, sessionId) != null) {
-                    io.github.nanomuse.terminal.DeviceAim.set(ctx, sessionId, null)
-                }
-                continue
-            }
-            if (io.github.nanomuse.terminal.DeviceAim.id(ctx, sessionId) != device) {
-                io.github.nanomuse.terminal.DeviceAim.set(ctx, sessionId, device)
-            }
-        }
+        if (r.touchedSessions.isNotEmpty()) _pulled.tryEmit(r.touchedSessions)
     }
 
 }

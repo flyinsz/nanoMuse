@@ -92,17 +92,23 @@ export function boundDevice(): BoundDevice | null {
 }
 
 /**
- * The device the relay says holds this conversation's context (C13, impl §A), or undefined when
- * it has not said. This is the conversation's own owner, read back from the sync reply — the
- * fact the design wants carried (`docs/session-handoff.md` §2: ownership is about *the
- * conversation*, not about where the last message came from), so a chat the NAS has been running
- * is held by the NAS here and the next plain sentence goes there without an `@`.
+ * The device the relay says holds this conversation's context (C13), or undefined when it has
+ * not said. This is the conversation's own owner, read back from the sync reply — the fact the
+ * design wants carried (`docs/session-handoff.md` §2: ownership is about *the conversation*,
+ * not about where the last message came from), so a chat another device has been running is
+ * held by it here and the next plain sentence goes there without an `@`.
+ *
+ * The account's main chat is the one exception: every device holds its own copy of it, and the
+ * relay keeps a single row for all of them, so an owner read there is one device's turn-taking
+ * fact about a chat this computer also has. Following it would leave this computer unable to use
+ * its own main chat. That device's context is reachable from its own chat, which its face opens.
  *
  * A record the person made by hand wins over it (`ownerOf` is asked first): `@本机` is an
  * explicit wish about this window, and the relay's word must not undo it.
  */
 export function relayOwner(): string | undefined {
   if (!currentSession) return undefined
+  if (currentSession === peekLive().sync?.mainSession) return undefined
   const device = peekLive().sync?.deviceOwners?.[currentSession]
   return device === undefined || device === '' ? undefined : device
 }
@@ -135,7 +141,7 @@ export function takeRoute(text: string, thisLabel: string): { target: OwnerTarge
     thisLabel,
     selfId: hub.deviceId,
     devices: hub.devices,
-    owner: ownerOf(currentSession),
+    owner: effectiveOwner(),
     bound: boundDevice(),
   })
   // A mention that moved the owner is written down here, so the next plain sentence follows it;
@@ -145,14 +151,21 @@ export function takeRoute(text: string, thisLabel: string): { target: OwnerTarge
   return { target: route.target, text: route.text }
 }
 
+/**
+ * The owner a plain sentence goes to: the person's own record for this chat (`@` and `@本机`
+ * write it), else the relay's word on the conversation. One function for the routing and the
+ * line above the composer, so the two cannot name different devices — a line that said one
+ * device while the words went to another is worse than no line (`session-owner.ts`).
+ */
+export function effectiveOwner(): string | undefined {
+  const recorded = ownerOf(currentSession)
+  return recorded !== undefined ? recorded : relayOwner()
+}
+
 /** Who runs the conversation on screen right now, for the line above the composer. */
 export function currentExecutor(): OwnerTarget {
   const hub = peekLive().hub
-  const recorded = ownerOf(currentSession)
-  // The person's own record first (`@本机` must hold), then the relay's word on the conversation,
-  // then the device whose chat this is — the same order the routing takes.
-  const owner = recorded !== undefined ? recorded : relayOwner()
-  return executorOf(owner, boundDevice(), hub.devices, hub.deviceId)
+  return executorOf(effectiveOwner(), boundDevice(), hub.devices, hub.deviceId)
 }
 
 /** What a card needs to word itself, in the UI language. */
