@@ -1557,3 +1557,77 @@ def test_streaming_never_touches_presence(main_only, monkeypatch: pytest.MonkeyP
         {"kind": "delta", "thread": MAIN_THREAD, "text": "words"},
     )
     assert len(relay.working_calls) == before
+
+
+def test_a_tool_step_of_a_local_run_reaches_the_relay(main_only) -> None:
+    """C13 §4: a step of a run happening here goes out as a step, not only its words. A run
+    started here has no `tool_delta` on the bus — its cards are the web app's own `event` and
+    `update` frames — so those are what the step is read from. Without this a command and its
+    output never left the machine, and the other devices saw prose with no idea what ran."""
+    client, service, llm, relay = main_only
+    # the conversation has to exist on the relay before a batch can name it: one real turn first
+    llm.replies = [LLMResponse(content="ok", finish_reason="stop")]
+    client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "go"})
+    wait_for(lambda: service.sync.cid_of(MAIN_THREAD) is not None)
+    relay.stream_calls.clear()
+
+    def card(kind: str, **fields: Any) -> None:
+        client.portal.call(  # type: ignore[union-attr]
+            service.sync.stream_frame,
+            kind,
+            {"kind": kind, "event": {"type": "tool", "thread": MAIN_THREAD, **fields}},
+        )
+
+    # a call: the tool's name and the model's own words for the step
+    card(
+        "event", tool="shell", title="list the downloads folder", summary="ls -la", status="running"
+    )
+    wait_for(lambda: any((c.get("tool") or {}).get("stage") == "call" for c in relay.stream_calls))
+    call = next(c for c in relay.stream_calls if c["tool"]["stage"] == "call")
+    assert call["tool"]["name"] == "shell"
+    assert call["tool"]["summary"] == "list the downloads folder"
+
+    # the answer: the same card updated, with what the tool printed
+    card(
+        "update",
+        tool="shell",
+        title="list the downloads folder",
+        status="ok",
+        output="a.txt\nb.txt",
+    )
+    wait_for(
+        lambda: any((c.get("tool") or {}).get("stage") == "result" for c in relay.stream_calls)
+    )
+    done = next(c for c in relay.stream_calls if c["tool"]["stage"] == "result")
+    assert done["tool"]["summary"] == "a.txt\nb.txt"
+    assert done["tool"]["ok"] is True
+
+    # a card that is not a tool's says nothing: the conversation sync carries it
+    before = len(relay.stream_calls)
+    card("event", tool="", title="a notice", status="running")
+    assert len(relay.stream_calls) == before
+
+
+def test_a_failed_step_is_marked_as_one(main_only) -> None:
+    """A step that failed is drawn the way the clients draw a failure, not as a success."""
+    client, service, llm, relay = main_only
+    llm.replies = [LLMResponse(content="ok", finish_reason="stop")]
+    client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "go"})
+    wait_for(lambda: service.sync.cid_of(MAIN_THREAD) is not None)
+    relay.stream_calls.clear()
+    client.portal.call(  # type: ignore[union-attr]
+        service.sync.stream_frame,
+        "update",
+        {
+            "kind": "update",
+            "event": {
+                "type": "tool",
+                "tool": "shell",
+                "thread": MAIN_THREAD,
+                "status": "error",
+                "output": "no such file",
+            },
+        },
+    )
+    wait_for(lambda: relay.stream_calls)
+    assert relay.stream_calls[0]["tool"]["ok"] is False

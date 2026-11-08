@@ -120,6 +120,43 @@ def _iso(unix: int | float | None) -> str:
         return now_iso()
 
 
+def _tool_step(event: object) -> dict[str, Any] | None:
+    """A tool card off the bus (websocket `event` / `update`), as the step the other devices draw.
+
+    The web app's own cards are built in ``server/webui.py``: a call is an event whose ``type``
+    is ``tool`` with the tool's name, the model's own words for the step (``title``) and the
+    technical summary; the answer is an ``update`` of the same card carrying ``status`` and the
+    first of ``output``. Both become one step — the card's own words where it has them, so the
+    line reads the way the person watching this device reads it.
+
+    None for a card that is not a tool's (a notice, a question, an artifact, a message): the
+    other devices draw those through the conversation sync, and a step frame for each would
+    say the same thing twice. A card without a tool name is skipped for the same reason.
+    """
+    if not isinstance(event, dict):
+        return None
+    if str(event.get("type") or "") != "tool":
+        return None
+    name = str(event.get("tool") or "").strip()
+    if not name:
+        return None
+    status = str(event.get("status") or "")
+    result = status in ("ok", "error", "blocked")
+    words = str(event.get("title") or event.get("summary") or "").strip()
+    if result:
+        output = str(event.get("output") or "").strip()
+        summary = output or words
+    else:
+        summary = words
+    return {
+        "thread": str(event.get("thread") or ""),
+        "name": name,
+        "stage": "result" if result else "call",
+        "summary": summary,
+        "ok": status != "error" and status != "blocked",
+    }
+
+
 class ConversationSync:
     def __init__(self, svc: MuseService):
         self.svc = svc
@@ -618,6 +655,8 @@ class ConversationSync:
                     "tool_delta",
                     "stream_start",
                     "stream_end",
+                    "event",
+                    "update",
                 ):
                     self.stream_frame(kind, msg)
         finally:
@@ -629,15 +668,29 @@ class ConversationSync:
 
     # ------------------------------------------------------------------ the run's words (C13 §4)
     def stream_frame(self, kind: str, msg: dict[str, Any]) -> None:
-        """A stream frame from this device's own run, on its way to the relay's other devices.
-        Batched: the words accumulate and go out on a timer, so a long answer costs a handful
-        of frames a second rather than one per token (the relay allows 60 a second per socket).
+        """A bus frame from this device's own run, on its way to the relay's other devices.
 
-        Only the local run's frames are forwarded — those carry no ``round``. A frame that
-        has one was relayed *here* from another device (``_apply_stream`` feeds those to the
-        local web app), and sending it back would put its words on the relay a second time.
+        Three shapes arrive here. The model's words come as ``delta`` / ``reasoning_delta`` and
+        are batched: they accumulate and go out on a timer, so a long answer costs a handful of
+        frames a second rather than one per token (the relay allows 60 a second on one socket).
+        A step comes as ``tool_delta`` when it was relayed in, or — for a run started *here* —
+        as the ``event`` / ``update`` pair the web app's own tool cards are built from; the card
+        is turned into the same step the clients draw (``_tool_step``), so a command and its
+        output reach the other devices instead of being dropped on the floor.
+
+        Only the local run's frames are forwarded — a frame that carries a ``round`` was relayed
+        *here* from another device (``_apply_stream`` feeds those to the local web app), and
+        sending it back would put its words on the relay a second time.
         """
-        if self._stopped or not self.active or msg.get("round"):
+        if self._stopped or not self.active:
+            return
+        if kind in ("event", "update"):
+            step = _tool_step(msg.get("event"))
+            if step is None:
+                return
+            self._stream_step(step)
+            return
+        if msg.get("round"):
             return
         thread_id = str(msg.get("thread") or "")
         if not thread_id:
@@ -682,6 +735,50 @@ class ConversationSync:
                 "ok": tool.get("ok") is not False,
             }
         self._stream_flush_soon(thread_id)
+
+    def _stream_step(self, step: dict[str, Any]) -> None:
+        """A tool card of this device's own run, sent at once rather than batched: a step is
+        one event of its own, not a stream of words, and the other devices should see it the
+        moment it happens. The card carries no thread of its own in the way a delta does, so
+        the buffer is opened here if the run has not written anything yet.
+        """
+        if self._stopped or not self.active:
+            return
+        thread_id = str(step.get("thread") or "")
+        if not thread_id:
+            return
+        thread = self.svc.threads.get(thread_id)
+        if thread is None or not self._eligible(thread):
+            return
+        cid = self.cid_of(thread.id)
+        if not cid:
+            return
+        buf = self._streams.get(thread_id)
+        if buf is None:
+            buf = {
+                "cid": cid,
+                "round": new_cid(),
+                "delta": "",
+                "reasoning": "",
+                "tool": None,
+                "seq": 0,
+            }
+            self._streams[thread_id] = buf
+        # anything already written goes first, so the step is not overtaken by the words after it
+        if buf.get("delta") or buf.get("reasoning"):
+            self._send_buffer(buf)
+        buf["seq"] = int(buf.get("seq") or 0) + 1
+        self._post_stream(
+            str(buf["cid"]),
+            str(buf["round"]),
+            int(buf["seq"]),
+            tool={
+                "name": str(step["name"]),
+                "stage": str(step["stage"]),
+                "summary": str(step.get("summary") or "")[:STREAM_SUMMARY_CAP],
+                "ok": step.get("ok") is not False,
+            },
+        )
 
     def _stream_flush_soon(self, thread_id: str) -> None:
         """One batch per interval: the buffer keeps accumulating, and the flush already
