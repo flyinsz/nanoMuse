@@ -237,6 +237,9 @@ class Hub:
         self.db: Database = cloud.db
         self.frame_limit = frame_limit
         self.online: dict[str, dict[str, Connection]] = {}
+        # account → the device ids the last `devices` frame named, so a ping that carries no
+        # change stays quiet ([_refresh_devices])
+        self._device_sets: dict[str, frozenset[str]] = {}
         # keyed (account, call id): ids are the callers' own and only unique within an account
         self.pending: dict[tuple[str, str], Pending] = {}
         # for the operator's self-check: frames dropped and sockets closed for flooding, ever
@@ -312,10 +315,30 @@ class Hub:
 
     async def broadcast_devices(self, account_id: str) -> None:
         conns = list(self.online.get(account_id, {}).values())
+        # What the frame about to go out says, so [_refresh_devices] can tell a later ping that
+        # carries no news from one that does. Recorded even with nobody to send to: an account
+        # with no sockets has an empty set, which is a fact worth remembering too.
+        self._device_sets[account_id] = frozenset(self.online.get(account_id, {}))
         if not conns:
             return
         frame = {"type": "devices", "devices": self.devices(account_id)}
         await asyncio.gather(*(c.send(frame) for c in conns))
+
+    async def _refresh_devices(self, account_id: str) -> None:
+        """Send the device list again when who is online has changed since it last went out.
+
+        [broadcast_devices] fires on a connect, a leave, a rename and a forget, which is every
+        event the relay itself causes. It cannot cover a device that was already connected when
+        a client joined later: that client's `welcome` named the list as it stood then, and
+        nothing tells the account about it afterwards. A phone whose strip was missing an online
+        NAS that had connected hours earlier is exactly this case.
+
+        The ping is the one frame every client sends on a timer, so the comparison rides along
+        there: no frame goes out when the set has not moved.
+        """
+        if self._device_sets.get(account_id) == frozenset(self.online.get(account_id, {})):
+            return
+        await self.broadcast_devices(account_id)
 
     async def broadcast_profile(self, account_id: str, rev: int, device: str) -> None:
         """The account's name or look changed: every connected device of it hears the new
@@ -625,6 +648,11 @@ class Hub:
             # every client pings; a caller with one call outstanding and nothing more to
             # ask would otherwise never hear `timeout` (the sweep ran on new calls only)
             await self._sweep()
+            # A client only ever hears `devices` when one connects or leaves, so a device that
+            # came up while this one was already connected stays missing from its list. The ping
+            # is the frame every client already sends on a timer; the list is re-sent here when
+            # it has moved, and nothing goes out when it has not.
+            await self._refresh_devices(conn.account_id)
         elif kind == "devices":
             await conn.send({"type": "devices", "devices": self.devices(conn.account_id)})
         elif kind == "call":
