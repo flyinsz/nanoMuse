@@ -58,11 +58,16 @@ object RemoteTaskController {
     /**
      * What became of the run. [Answered.text] is the target's own words and the only thing
      * that counts as an answer; an empty one is [Failed], never a quiet success (issue 718).
+     * [Offline] is the one outcome that never left this phone: the device was already known to be
+     * away, so nothing was sent and there is no run to wait on. It carries no text of its own —
+     * the caller words it in the UI language (there is one, and it is the same sentence the strip's
+     * line over the box uses).
      */
     sealed interface Outcome {
         data class Answered(val text: String) : Outcome
         data class Failed(val reason: String) : Outcome
         data object Stopped : Outcome
+        data object Offline : Outcome
     }
 
     /** Whether this phone may run things on another device at all. */
@@ -96,6 +101,15 @@ object RemoteTaskController {
         onStep: (Step) -> Unit,
         stopFlag: () -> Boolean = { false },
     ): Outcome {
+        // Contract C13, "owner 离线不发" (docs/session-handoff.md §3): a device the relay has
+        // already marked away is not sent to at all. The hub would answer `device_offline` after a
+        // round trip, but by then this phone has said the run started, and the person is left
+        // watching a disc spin for a sentence that never left — the state C13 forbids. Refusing
+        // here, before the counter below, is what keeps the spinner honest: it only ever follows a
+        // run that really went out. The `@`-mention and the chat's aim are both resolved against
+        // the hub's whole list, sleeping devices included (DeviceStrip.others, DeviceAim), which is
+        // why an offline target reaches this call rather than being quietly rerouted.
+        if (!device.online) return Outcome.Offline
         // The strip's spinner follows this run from the moment it leaves until its answer, its
         // failure or a stop — the `finally` below is the only exit every one of those shares.
         _inFlight.update { runs -> runs + (device.hubId to (runs[device.hubId] ?: 0) + 1) }

@@ -297,6 +297,10 @@ object HubActions {
         if (sessionId == null) { call.fail("no_model", "the phone has no model to think with; sign in to nanoMuse Cloud there"); return }
         call.event(JSONObject().put("stage", "thinking").put("session", sessionId))
         AgentForegroundService.startService(app, sessionCount = 1, toolStatus = context.getString(R.string.nm_hub_task_from, call.senderName))
+        // nanoMuse: the `prefix` folds "who asked" into the user turn, which the target's session
+        // then keeps as its own history — the context pollution contract C13 requires moving to a
+        // side channel. It is left as it is on purpose: the runtime has nowhere to put the fact
+        // yet, so the change goes with the runtime, not from here. See the note on HubTasks.prompt.
         val prompt = HubTasks.prompt(
             text,
             prefix = if (call.senderKind == "web") null else context.getString(R.string.nm_hub_task_prefix, call.senderName),

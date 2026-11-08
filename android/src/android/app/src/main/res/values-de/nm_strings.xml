@@ -1245,4 +1245,7 @@
     <string name="nm_backup_resume">Sicherung fortsetzen</string>
     <string name="nm_backup_discard">Unterbrochene Sicherung verwerfen</string>
     <string name="nm_backup_resume_hint">Eine unterbrochene Sicherung wartet. Mit den ursprünglichen Optionen fortsetzen und bei Bedarf das Verschlüsselungspasswort erneut eingeben, oder verwerfen und neu beginnen.</string>
+    <string name="nm_device_executor">Run by %1$s</string>
+    <string name="nm_device_executor_self">Run by this device</string>
+    <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
 </resources>

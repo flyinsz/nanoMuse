@@ -1246,4 +1246,7 @@
     <string name="nm_backup_resume">Retomar backup</string>
     <string name="nm_backup_discard">Descartar backup interrompido</string>
     <string name="nm_backup_resume_hint">Há um backup interrompido. Retome com as opções originais e digite novamente a senha se necessário, ou descarte para começar de novo.</string>
+    <string name="nm_device_executor">Run by %1$s</string>
+    <string name="nm_device_executor_self">Run by this device</string>
+    <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
 </resources>

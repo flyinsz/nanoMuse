@@ -1241,4 +1241,7 @@
     <string name="nm_backup_resume">バックアップを再開</string>
     <string name="nm_backup_discard">中断したバックアップを破棄</string>
     <string name="nm_backup_resume_hint">中断したバックアップがあります。元の設定で再開し、必要なら暗号化パスワードを再入力するか、破棄して最初から開始してください。</string>
+    <string name="nm_device_executor">Run by %1$s</string>
+    <string name="nm_device_executor_self">Run by this device</string>
+    <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
 </resources>

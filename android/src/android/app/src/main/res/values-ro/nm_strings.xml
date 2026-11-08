@@ -1249,4 +1249,7 @@
     <string name="nm_backup_resume">Reia copia</string>
     <string name="nm_backup_discard">Renunță la copia întreruptă</string>
     <string name="nm_backup_resume_hint">Există o copie întreruptă. Reia cu opțiunile originale și introdu din nou parola dacă este necesar, sau renunță pentru a începe din nou.</string>
+    <string name="nm_device_executor">Run by %1$s</string>
+    <string name="nm_device_executor_self">Run by this device</string>
+    <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
 </resources>

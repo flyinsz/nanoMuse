@@ -5620,10 +5620,24 @@ fun ChatScreen(
                     }
                     if (inbound && thisId != null) mine + thisId else mine
                 }
+                // nanoMuse: the account's Muses as the strip and the executor line both draw them,
+                // resolved once so the two cannot disagree about who is in front or who runs the
+                // chat (C13, io.github.nanomuse.terminal.DeviceExecutor).
+                val nmMuses = remember(nmHubDevices) {
+                    io.github.nanomuse.terminal.DeviceStrip.muses(nmHubDevices)
+                }
+                // nanoMuse: which device runs this chat, in one quiet line over the strip (C13,
+                // docs/session-handoff.md). The same resolution the send takes, so the line and
+                // where the words go cannot drift; a device that is asleep is named here with the
+                // send's own refusal in the wording. Drawn above the faces rather than in the chat
+                // so the fact sits beside the disc it belongs to (io.github.nanomuse.ui.chat.nmDeviceExecutorLine).
+                io.github.nanomuse.ui.chat.nmDeviceExecutorLine(
+                    aimedHubId = nmFaces,
+                    muses = nmMuses,
+                    modifier = Modifier.padding(horizontal = nmComposerHorizontalInset),
+                )
                 io.github.nanomuse.ui.chat.nmDeviceFaces(
-                    devices = io.github.nanomuse.terminal.DeviceStrip.muses(
-                        io.github.nanomuse.hub.Hub.devices.collectAsState().value,
-                    ),
+                    devices = nmMuses,
                     focusedId = nmFaces,
                     // 46dp read as a button being held down rather than one of a row, so it came
                     // down to 40dp; a nudge back up to 42dp, which keeps the gap the console has

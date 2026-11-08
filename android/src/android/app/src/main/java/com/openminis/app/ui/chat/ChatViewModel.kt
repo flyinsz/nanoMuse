@@ -6523,6 +6523,19 @@ class ChatViewModel(
         if (asked.isBlank()) return false
         val device = aimed
         viewModelScope.launch {
+            // nanoMuse: C13, "owner 离线不发" (docs/session-handoff.md §3). A sleeping device is
+            // refused before its chat is made or the person is moved into it, so a task with no one
+            // to run it is never put on screen and no empty `→ <device>` chat is left behind. The
+            // aim resolves against the hub's whole list, sleeping devices included, which is why an
+            // offline target reaches here at all. nmDeliverToDevice and the controller refuse it
+            // too, so the three agree.
+            if (!device.online) {
+                appendSystemInfo(
+                    text = context.getString(R.string.nm_device_executor_offline, device.name),
+                    iconKind = "device",
+                )
+                return@launch
+            }
             // The message belongs in the chat this phone keeps with [device], not in whichever
             // chat it was typed in: a device's answers, its steps and the questions it asks are
             // all about that one device, and leaving them in the open chat reads as this phone's
@@ -6568,6 +6581,19 @@ class ChatViewModel(
      */
     internal fun nmDeliverToDevice(targetSid: String, device: io.github.nanomuse.reach.Computers.Computer, asked: String) {
         viewModelScope.launch {
+            // nanoMuse: C13, "owner 离线不发" (docs/session-handoff.md §3): a sleeping device is told
+            // nothing, and the sentence is *not* put on screen — a line the person watches and no
+            // device ever runs is the state the contract forbids. Said here, before the person's
+            // line, so the chat does not carry a message that went nowhere; the same reading
+            // `nmDeviceFaces` takes when a tap lands on a sleeping face. The controller refuses it
+            // too, so the decision is not this call site's alone.
+            if (!device.online) {
+                appendSystemInfo(
+                    text = context.getString(R.string.nm_device_executor_offline, device.name),
+                    iconKind = "device",
+                )
+                return@launch
+            }
             // the person's line first, without the mention, exactly as typed after "@name"
             nmAppendUserLine(targetSid, asked)
             // The steps arrive on the hub's own thread and the bubble is written from here, so
@@ -6603,6 +6629,11 @@ class ChatViewModel(
                     context.getString(R.string.nm_device_failed, device.name, outcome.reason)
                 io.github.nanomuse.terminal.RemoteTaskController.Outcome.Stopped ->
                     context.getString(R.string.nm_device_stopped, device.name)
+                // nanoMuse: the device went away between the check above and the send, so nothing
+                // left this phone. Said in the offline wording rather than as a failure with a
+                // reason, which is what an empty round trip would otherwise read as.
+                io.github.nanomuse.terminal.RemoteTaskController.Outcome.Offline ->
+                    context.getString(R.string.nm_device_executor_offline, device.name)
             }
             nmAppendAssistantLine(targetSid, said)
         }

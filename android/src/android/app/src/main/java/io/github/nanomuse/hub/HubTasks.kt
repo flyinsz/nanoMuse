@@ -52,6 +52,24 @@ internal class HubTasks {
          * is there the answer is asked for in it, so the person reads the result in the language
          * of the device they used; without it the model goes by the text. The line is English,
          * for the model, like the rest of the prompt's framing.
+         *
+         * Known context pollution, and contract C13 says to fix it — but not here, and not yet.
+         *
+         * [prefix] ("Asked from <device>…") is folded into the message body, and this body is the
+         * user turn: it is written to the target's session and stays in that conversation's
+         * history forever. So a sentence this device asked is indistinguishable, from then on,
+         * from one the person typed on the target itself, and the model keeps seeing this device's
+         * name as part of what was said. `docs/session-handoff.md` §3 ("谁问的"走侧信道) is
+         * explicit that who asked must live on a parallel channel, the way the Python runtime's
+         * `Thread.purposes` (`nanomuse/server/service.py`) carries it, and never in the user text.
+         *
+         * Why it is still here, and must stay for now. The Python runtime has no side channel to
+         * put it on yet (`nanomuse/hub/service.py` `_task()` takes only `text`), so dropping the
+         * prefix today would make an old runtime receive a bare sentence with no indication of
+         * where it came from — a behaviour change that has to be made with the runtime, in the
+         * same release, not from this file alone. The fix belongs to the handoff work
+         * (docs/tasks/session-handoff-impl.md, `thread`/`handoff` args plus a runtime-side
+         * channel); when that lands, this line comes out and the note with it.
          */
         fun prompt(text: String, prefix: String?, language: String?): String {
             val tag = language.orEmpty().trim().take(20)

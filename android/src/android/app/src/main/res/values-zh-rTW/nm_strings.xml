@@ -1211,4 +1211,8 @@
     <string name="nm_backup_resume">繼續備份</string>
     <string name="nm_backup_discard">捨棄中斷的備份</string>
     <string name="nm_backup_resume_hint">有一份備份尚未完成。請使用原來的選項繼續，必要時重新輸入加密密碼；也可捨棄後重新開始。</string>
+    <!-- 裝置列上方說明這條對話由哪台裝置執行（C13，docs/session-handoff.md）。 -->
+    <string name="nm_device_executor">由 %1$s 執行</string>
+    <string name="nm_device_executor_self">由本機執行</string>
+    <string name="nm_device_executor_offline">%1$s 離線，這條不會發出</string>
 </resources>

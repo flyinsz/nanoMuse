@@ -1227,4 +1227,11 @@
     <string name="nm_backup_resume">Resume backup</string>
     <string name="nm_backup_discard">Discard interrupted backup</string>
     <string name="nm_backup_resume_hint">An interrupted backup is waiting. Resume with the original options and enter the encryption password again if needed, or discard it to start over.</string>
+    <!-- The line above the device strip saying which device runs this conversation (C13,
+         docs/session-handoff.md). Wording matches the desktop's ExecutorLine. The device whose
+         own chat it is always says its name, online or not; "Run by this device" is only drawn on
+         an account that has another device, where the sentence could go elsewhere. -->
+    <string name="nm_device_executor">Run by %1$s</string>
+    <string name="nm_device_executor_self">Run by this device</string>
+    <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
 </resources>

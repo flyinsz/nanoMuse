@@ -1245,4 +1245,7 @@
     <string name="nm_backup_resume">Reanudar copia</string>
     <string name="nm_backup_discard">Descartar copia interrumpida</string>
     <string name="nm_backup_resume_hint">Hay una copia interrumpida. Reanúdala con las opciones originales y vuelve a introducir la contraseña si hace falta, o descártala para empezar de nuevo.</string>
+    <string name="nm_device_executor">Run by %1$s</string>
+    <string name="nm_device_executor_self">Run by this device</string>
+    <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
 </resources>

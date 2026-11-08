@@ -1241,4 +1241,7 @@
     <string name="nm_backup_resume">Lanjutkan pencadangan</string>
     <string name="nm_backup_discard">Buang cadangan yang terhenti</string>
     <string name="nm_backup_resume_hint">Ada pencadangan yang terhenti. Lanjutkan dengan opsi asli dan masukkan kembali kata sandi jika diperlukan, atau buang untuk memulai ulang.</string>
+    <string name="nm_device_executor">Run by %1$s</string>
+    <string name="nm_device_executor_self">Run by this device</string>
+    <string name="nm_device_executor_offline">%1$s is offline, nothing will be sent</string>
 </resources>
