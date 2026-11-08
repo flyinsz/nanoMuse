@@ -192,3 +192,48 @@ Android / iOS 若也要做，同样走侧信道，不得改用户消息文本。
 - 只改自己那一栏的文件；不 commit；不动版本号 / `CHANGELOG.md`；`web/` 不许跑 `npm run build`。
 - 接口以本文与 `docs/session-handoff.md` 为准。
 - 回报：改了哪些文件、检查命令**实际输出**、不确定处。
+
+---
+
+# 阶段三 · 第一刀：上行发送端 + Mac UI 三项（本轮）
+
+**已确认的 bug 根因**：`POST /v1/sync/stream` 在 runtime 侧**没有任何调用方**——上一轮只做了「中继 → 本机 Web/Mac」的接收端，漏了「runtime 跑的时候把逐字推给中继」的发送端。所以飞牛跑完才一次性同步出结果，逐字看不到。
+
+## W9 运行时（修 bug：补上行发送端）——本轮最高优先
+
+**接入点**：`nanomuse/sync/engine.py` 的 `_watch_status()`（**567 行**）已经在订阅 bus 并只取 `kind == "status"` 的帧（**598-599 行** `if msg.get("kind") != "status": continue`）。**同一个 bus 上就有 `delta` / `reasoning_delta` / `tool_delta` / `stream_start` / `stream_end` 帧**（`nanomuse/server/webui.py` 产生）。
+
+**任务**：
+1. 在 `_watch_status` 的循环里，除 `status` 外**再收这几种流帧**，转成 `POST /v1/sync/stream` 的上行请求。
+   - ⚠️ **不要新开订阅循环**：复用这一个（它已有「被 EventBus 丢弃后自愈重订阅」的处理，见 574-584 行）。
+   - ⚠️ 现成的节流范式就在同文件：`_presence_later`（549 行）/ `status_changed`（533 行）用 `PRESENCE_INTERVAL_S = 2.0` + `_scheduled` 集合防重入。**合批请照这个写法**，批间隔建议 **200-250ms**（契约 §4 要求；一条帧一个字会撞中继 `FRAMES_PER_S=60`）。
+2. 只推**本机正在跑**且 `_eligible(thread)` 的会话；`cid` 用 `cid_of(thread.id)`（`engine.py:211`）。**不推别的设备代跑的轮**（那是对方在推）。
+3. 帧字段严格按契约 B 节：`{cid, device, round, seq, delta?, reasoning?, tool?, done?}`，`tool` 对象是 `{name, stage, summary?, ok?}`。
+   - `round`：本轮自生成一个 id（每次 `stream_start` 换一个），同一个 turn 内复用。
+   - `seq`：同一 round 内自增（中继侧只透传，不去重）。
+   - `done`：`stream_end` 时发一帧 `done:true`。
+4. 在 `nanomuse/sync/client.py` 加一个 `async def stream(...)`（照 `working()` 的写法，`POST /v1/sync/stream`）。
+5. **不得**影响既有 `working` presence 行为；两者是并行的两条路。
+6. 测试（`tests/`）：① 本机跑一轮 → 中继收到带 `delta` 的 stream 请求（用假 client 断言参数）；② 合批（多条 delta 合成少数几次请求）；③ `done` 在收尾发出；④ 非 eligible 的会话不推；⑤ 既有 working 行为不变。
+
+## W10 Mac（UI 三项调整）
+
+1. **挪位置**：「由 飞牛深圳 执行」这行（`ExecutorLine`，slot `conversation.input.dock`，`id: 'nanomuse.executor'`，`index.ts:443`）从**输入框上方**挪到「nanomuse 动态图标名称下方」。
+   - 动态图标 = `Avatar`（slot `sidebar.brand.mark`，`index.ts:236`），名称 = `BrandName`（slot `sidebar.brand.name`，`index.ts:246`）。
+   - **做法**：改注册到 `sidebar.brand.name` 下方的位置（若该区域只有 name 一个 slot，则在同一个 slot 里把 name 和你的行一起渲染，或找 `sidebar` 里更下方的注入点）。**先读 `slots` API 在 `sidebar.*` 下有哪些可用槽**再定。若不落在 sidebar 而是会话头部，也要说明理由。
+2. **并入进度**：把原来输入框上方那条设备进度条（`device-task.ts` 的 `DeviceTaskLine`，slot `id: 'nanomuse.device-task'`）**也挪到同一处**，文案改为 **「{设备}正在处理：{动作}」**（原来是 `{设备} 正在做` + 步骤）。两步并一步：同一行里先执行者、再动作。
+3. **删掉多余的进度条**：挪完后，**输入框上方那条独立的进度条已无必要，删除它**（包括 slot 注册与对应样式/文案，若无其他引用）。⚠️ 但**保留** `deviceRuns` 那条会消失的状态与其数据流（会话内气泡下的进度仍由它驱动，见 `RemoteBubbles` 的 working 行），只删 UI 那条独立注册。
+4. i18n 文案进 `locales.ts` 的 `en`/`zh` **末尾追加**；仓库规范：不用 em/en dash、不用感叹号、不用营销词。中文不要逐字翻英文。
+5. 测试：`npm run build && npm run typecheck && npm test`（用 npm，`pnpm` 在本仓库报 `packages field missing or required`）。已知预存在失败 `cloud-capacity.test.mjs`（缺 `@deepseek-ai/dsh-llm-pi-ai`）。
+
+## W11 中继（只读核对，必要时微调）
+
+1. 核对 `stream_frame()` 与 `clean_tool()` 的字段与契约 B 节**逐字一致**；`round`/`seq` 缺省行为。
+2. 核对 `notify_stream()` 的扇出**不会回给发起设备**。
+3. 若发现 W9 需要的字段中继没透传（例如 `round` 或 `tool.summary`），**只做最小补齐 + 测试**。
+4. 检查 `FRAMES_PER_S=60` 对 W9 的合批频率是否够用（250ms 一批 = 4 帧/秒，够）；在报告里给出估算。
+
+## 纪律
+
+- 只改自己那一栏的文件；**不 commit**；不动版本号 / `CHANGELOG.md`；`web/` 不许跑 `npm run build`（本轮无人动 web）。
+- 回报：改了哪些文件 + 行号、检查命令**实际输出**、不确定处。
