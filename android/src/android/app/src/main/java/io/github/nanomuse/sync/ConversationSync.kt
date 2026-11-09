@@ -259,6 +259,23 @@ object ConversationSync {
         }
     }
 
+    /**
+     * One sentence this phone is handing to another device: the id it will carry everywhere, or
+     * blank when there is nothing to sync (see [rememberHandoff]).
+     *
+     * The chat has just written the line into its own log; this mints the id, remembers it
+     * against that row and asks for the push, in one place, so a caller adds a line of its own
+     * rather than four steps it would have to keep in step. The id it returns goes into the
+     * `task` frame on its way to the device that will run the round.
+     */
+    suspend fun handedOver(context: Context, sessionId: String, lineId: String, deviceId: String): String {
+        if (sessionId.isBlank() || lineId.isBlank() || deviceId.isBlank()) return ""
+        val mid = HandoffMid.of(deviceId, sessionId, lineId)
+        rememberHandoff(context, sessionId, lineId, mid)
+        sent(sessionId)
+        return mid
+    }
+
     fun sent(sessionId: String? = null) {
         val ctx = app ?: return
         if (!active(ctx)) return

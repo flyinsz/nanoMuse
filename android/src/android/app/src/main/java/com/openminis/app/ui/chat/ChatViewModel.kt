@@ -6492,6 +6492,8 @@ class ChatViewModel(
             }
             override fun restoreDraft(text: String) { if (_inputText.value.isEmpty()) _inputText.value = text }
             override suspend fun session(): String = ensureSession()
+            // nanoMuse: the line's own id comes back out, so a handed-over sentence can be given
+            // the one `mid` it keeps everywhere (see `nmDeliverToDevice`).
             override suspend fun user(sessionId: String, text: String) { nmAppendUserLine(sessionId, text) }
             override fun started(sessionId: String) {
                 SessionActivityTracker.setActive(sessionId) { nmRemoteBridge.cancel() }
@@ -6637,15 +6639,13 @@ class ChatViewModel(
             }
             // the person's line first, without the mention, exactly as typed after "@name"
             val lineId = nmAppendUserLine(targetSid, asked)
-            // C13 (impl §3, "单次推送（单 mid）"): the id this sentence carries everywhere. The
-            // target writes its own row for the same words under it, so the relay keeps one and
-            // every device reads the sentence once. Registered here, on the row this phone just
-            // wrote, so the copy arriving back by sync is recognised rather than drawn twice.
-            val handoffMid = io.github.nanomuse.sync.HandoffMid.of(
-                io.github.nanomuse.hub.Hub.deviceId(context), targetSid, lineId,
-            )
-            io.github.nanomuse.sync.ConversationSync.rememberHandoff(context, targetSid, lineId, handoffMid)
-            io.github.nanomuse.sync.ConversationSync.sent(targetSid)
+            // nanoMuse: C13 (impl §3, "单次推送（单 mid）"). The id this sentence carries
+            // everywhere: the target writes its own row for the same words under it, so the relay
+            // keeps one and every device reads it once. Registered against the line just written,
+            // so the copy arriving back by sync is recognised rather than drawn twice; the id
+            // rides the `task` frame below. The steps live in ConversationSync.handedOver.
+            val handoffMid = io.github.nanomuse.sync.ConversationSync
+                .handedOver(context, targetSid, lineId, device.hubId)
             // The steps arrive on the hub's own thread and the bubble is written from here, so
             // they are queued as they come and drawn between the two suspends below.
             val steps = java.util.concurrent.LinkedBlockingQueue<String>()

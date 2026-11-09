@@ -1282,3 +1282,38 @@ test('C13 a turn deleted elsewhere leaves the chat with the device too', async (
   await e.pull()
   assert.deepEqual(sessions.forgotten.filter(([sid]) => sid === 's-nas').map(([, m]) => m), [mid])
 })
+
+test('C13 a sentence this computer hands over is one row, whatever the target pushes back', async () => {
+  // The line is put on screen here the moment it is sent, and the device that runs the round
+  // writes its own row for the same words. Both go up under one id, so the relay keeps one and
+  // the copy arriving by pull is recognised rather than drawn beside the line already read.
+  const relay = fakeRelay()
+  const sessions = fakeSessions()
+  sessions.add('s-main', 'Main chat', [])
+  const { engine: e } = engine(relay, sessions, {
+    state: { ...emptyState(), sideChats: true, mainSession: 's-main', cids: { 's-main': 'c1' } },
+  })
+  await e.setMain('s-main')
+  relay.add('c1', 'main', 'Main chat', 'pc-1', 'Desk')
+  await e.pull()
+
+  // the id this computer gives the sentence it is handing over, and the row the target pushed
+  const mid = e.handedOver('s-main', 'dt:abc:q', 'nas-1')
+  assert.ok(mid.length >= 4 && mid.length <= 64, 'the id fits what a relay keeps')
+  assert.match(mid, /^[a-z0-9][a-z0-9._:-]*$/, 'and the shape it accepts')
+  const pushed = relay.say('c1', 'user', 'hand this over', 'nas-1', 'nas')
+  // the target wrote its row under the id this computer handed over, so move it there
+  const row = relay.msgs.get(pushed)
+  relay.msgs.delete(pushed)
+  row.mid = mid
+  relay.msgs.set(mid, row)
+  await e.pull()
+
+  // the copy is a row this computer already knows, so nothing is appended twice
+  assert.deepEqual(sessions.remote('s-main'), [], 'the arriving copy is not a second row')
+
+  // a different sentence from the same device is a row of its own
+  relay.say('c1', 'user', 'and another thing', 'nas-1', 'nas')
+  await e.pull()
+  assert.deepEqual(sessions.remote('s-main').map((l) => l.text), ['and another thing'])
+})

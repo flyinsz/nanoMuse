@@ -3481,6 +3481,11 @@ export default class NanomuseCloud extends Service {
       this.sync?.touch()
     }
     keep('user', asked, 'q')
+    // C13 (impl §3, "单次推送（单 mid）"): the id this sentence carries everywhere. The device
+    // that runs the round writes its own row for the same words under it, so the relay keeps one
+    // and every reader sees one; registered against the line just put on screen, so the copy
+    // arriving by pull is recognised instead of drawn beside it.
+    const handoffMid = sessionId ? (this.sync?.handedOver(sessionId, `${taskId}:q`, d.id) ?? '') : ''
     working()
     const steps: string[] = []
     // The questions this run raised and the promises that go back to the device; answered in
@@ -3540,6 +3545,9 @@ export default class NanomuseCloud extends Service {
           // A target that does not know the field ignores it (older clients keep working).
           thread: 'main',
           handoff: true,
+          // The id this computer's own line carries (see above): the target writes its row under
+          // it, so the one sentence is one row on the relay.
+          ...(handoffMid ? { mid: handoffMid } : {}),
         },
         { timeoutMs: DEVICE_TASK_TIMEOUT_MS, onEvent },
       )

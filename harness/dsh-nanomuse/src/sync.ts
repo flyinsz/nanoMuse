@@ -736,6 +736,24 @@ export class SyncEngine {
     this.changed()
   }
 
+  /**
+   * The chat has just put a sentence on screen that is being handed to another device, and this
+   * is the id it goes up under (C13, impl §3, "单次推送（单 mid）"). The device that runs the
+   * round writes its own row for the same words under this id, so the relay keeps one and every
+   * reader sees one; the copy coming back by pull is then recognised here rather than drawn a
+   * second time next to the line the person is already reading.
+   *
+   * The id is the one this computer would have derived had the line been pushed from its own log
+   * (`deriveMid`, the same three parts), so the two halves cannot mint different ids for the same
+   * sentence. Marked pulled, which is what makes the arriving copy a duplicate.
+   */
+  handedOver(sessionId: string, lineId: string, device: string): string {
+    const mid = deriveMid(this.options.deviceId(), sessionId, lineId)
+    this.state.pulled[mid] = sessionId
+    void this.options.save(this.state).catch((error: unknown) => this.log('warn', `nanomuse sync: the handed-over id was not saved: ${message(error)}`))
+    return mid
+  }
+
   /** The conversation id a session syncs under, when it has one. */
   cidOf(sessionId: string): string | undefined {
     return this.state.cids[sessionId]
