@@ -12,6 +12,7 @@ import io.github.nanomuse.account.AccountData
 import io.github.nanomuse.cloud.NanoMuseCloud
 import io.github.nanomuse.guard.RiskGate
 import io.github.nanomuse.hub.Hub
+import io.github.nanomuse.terminal.DeviceChat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -233,6 +234,31 @@ object ConversationSync {
      * the turn's last row, through [changed] — [Transcript] holds it back until the turn is
      * finished — and [turnEnded] clears the presence.
      */
+    /**
+     * Records the `mid` this phone gave a sentence it handed to another device (C13, impl §3).
+     *
+     * The sentence is written into this phone's own chat the moment it is sent, before anything
+     * has left; the device that runs it writes its own row for the same words and pushes it under
+     * this id. Two rows for one sentence is the duplication the contract names, and the copy that
+     * arrives by sync is what would double it here. Knowing the id up front is what lets the row
+     * this phone already has be recognised as the same one — so the copy is skipped rather than
+     * drawn a second time.
+     *
+     * Marked pushed, with no device on it: the row is this phone's own line in its own chat, and
+     * the copy of these words on the relay is the target's, pushed under the same `mid`. Sending
+     * them again from here under a second id is the very double this avoids on the wire.
+     */
+    suspend fun rememberHandoff(context: Context, sessionId: String, messageId: String, mid: String) {
+        if (mid.isBlank() || messageId.isBlank()) return
+        withContext(Dispatchers.IO) {
+            runCatching {
+                RoomSyncStore(context).putMessages(
+                    listOf(SyncMessage(messageId, mid, sessionId, pushed = true)),
+                )
+            }
+        }
+    }
+
     fun sent(sessionId: String? = null) {
         val ctx = app ?: return
         if (!active(ctx)) return
@@ -393,11 +419,23 @@ object ConversationSync {
         }
     }
 
-    /** The rounds running in one local chat right now, newest first: what the chat draws. */
+    /**
+     * The rounds running in one local chat right now, newest first: what the chat draws.
+     *
+     * A round handed to another device runs on *that* device's own main conversation (C13 §3), so
+     * its frames carry the account's main `cid` — and the chat this phone keeps with that device
+     * is where the person watching it is looking. Such a round is matched by the device that is
+     * running it ([StreamBuckets.StreamBucket.from]) as well as by the conversation the relay
+     * named, so the device's own chat shows its Muse working instead of standing empty. Nothing
+     * is added to [_streamChats] for it: that map holds one chat per `cid`, and writing the
+     * device's chat there would take the round away from the main chat rather than share it.
+     */
     fun streamsFor(sessionId: String, now: Long = System.currentTimeMillis()): List<StreamBuckets.StreamBucket> {
         val chats = _streamChats.value
+        val ctx = app
+        val deviceOfChat = if (ctx != null) DeviceChat.deviceOf(ctx, sessionId) else null
         val rounds: List<StreamBuckets.StreamBucket> = _streams.value.values
-            .filter { chats[it.cid] == sessionId }
+            .filter { chats[it.cid] == sessionId || (deviceOfChat != null && it.from == deviceOfChat) }
             .filter { it.round.isNotEmpty() && it.drawable }
             .filter { now - it.at < if (it.done) StreamBuckets.STREAM_GRACE_MS else StreamBuckets.STREAM_QUIET_MS }
         return rounds.sortedWith(compareByDescending<StreamBuckets.StreamBucket> { it.at }.thenBy { it.round })
@@ -543,6 +581,10 @@ object ConversationSync {
             deviceId = Hub.deviceId(ctx),
             account = account,
             sideChats = { _sideChats.value },
+            // A turn arriving from a device this phone has a chat with is written into that chat
+            // too (C13), so the chat with its Muse holds what its Muse has been saying. Read-only:
+            // a device the person never opened stays where the relay filed its turn.
+            deviceChatFor = { hubId -> runCatching { DeviceChat.existingFor(ctx, repo, hubId) }.getOrNull() },
             onAccountChanged = { accountChanged() },
         )
     }

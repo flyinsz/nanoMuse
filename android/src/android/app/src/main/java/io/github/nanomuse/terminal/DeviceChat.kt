@@ -60,6 +60,18 @@ object DeviceChat {
     }
 
     /**
+     * The chat already made for the device named by [hubId], or null when there is none or it is
+     * gone. The read-only half of [existing], for the paths that must not make one: a turn
+     * arriving through sync looks here to know whether the device it came from has a chat on this
+     * phone to be shown in as well, and a chat the person never opened is not one to invent.
+     */
+    suspend fun existingFor(context: Context, repo: ChatRepository, hubId: String): String? {
+        val id = prefs(context).getString("hub.session.${conversationOf(hubId)}", null)
+            ?.takeIf { it.isNotBlank() } ?: return null
+        return id.takeIf { runCatching { repo.dao.getSession(it) }.getOrNull() != null }
+    }
+
+    /**
      * The chat this phone keeps with [device], making it when there is none: what tapping a
      * device's face opens, and where a message addressed to that device goes.
      *

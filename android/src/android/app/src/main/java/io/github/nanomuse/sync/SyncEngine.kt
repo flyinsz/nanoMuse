@@ -1,5 +1,6 @@
 package io.github.nanomuse.sync
 
+import java.security.MessageDigest
 import java.util.UUID
 
 /**
@@ -64,6 +65,14 @@ class SyncEngine(
     private val newId: () -> String = { UUID.randomUUID().toString() },
     /** Settings → Data controls → "Also sync side chats": per device, off by default (C9). */
     private val sideChats: () -> Boolean = { false },
+    /**
+     * The chat this phone keeps with a device, when it has one (C13). A turn that arrived from
+     * that device is written into it as well as into the conversation the relay filed it under,
+     * so the chat with that device's Muse holds what that Muse has been saying — the same fact
+     * read from the other side. Null (the default, and what a device with no chat of its own
+     * answers) leaves the turn where the relay put it.
+     */
+    private val deviceChatFor: suspend (String) -> String? = { null },
     /** The signed-in account is not the last one (C10): the caller drops what it cached of the old one. */
     private val onAccountChanged: suspend () -> Unit = {},
 ) {
@@ -384,31 +393,58 @@ class SyncEngine(
     }
 
     private suspend fun applyMessage(m: RemoteMessage, touched: MutableSet<String>, replied: MutableSet<String>): Boolean {
-        val known = store.messageByMid(m.mid)
         if (m.deleted) {
-            if (known == null) return false
-            if (!sideChats() && store.conversation(known.sessionId)?.kind == "side") return false // C9: side chats rest while off
-            chats.deleteMessage(known.messageId)
-            store.removeMessages(listOf(known.messageId))
-            touched += known.sessionId
-            return true
+            // The row may stand twice: once where the relay filed it and once mirrored into the
+            // chat with the device that wrote it (see below). Both go, or a deleted turn stays
+            // readable in one of the two chats.
+            val twins = store.messagesByMid(m.mid)
+            if (twins.isEmpty()) return false
+            val gone = mutableListOf<String>()
+            for (row in twins) {
+                if (!sideChats() && store.conversation(row.sessionId)?.kind == "side") continue // C9
+                chats.deleteMessage(row.messageId)
+                gone += row.messageId
+                touched += row.sessionId
+            }
+            store.removeMessages(gone)
+            return gone.isNotEmpty()
         }
-        if (known != null) return false // ours, or seen before: never a second row for one mid
         if (m.device == deviceId) return false // our own echo under a mid this phone no longer maps
         if (m.role != "user" && m.role != "assistant") return false
         val conv = store.conversationByCid(m.cid) ?: return false
         if (conv.deleted || !conv.mine()) return false
         if (conv.kind != "main" && !sideChats()) return false // C9: a side row while the switch is off
+        // "Do I know this `mid`" is asked per chat, not per account: one turn may belong in two
+        // chats at once (see the mirror below), and a copy already in one of them is no reason to
+        // skip the other. Skipped only when *this* chat holds it.
+        if (store.messageByMidIn(m.mid, conv.sessionId) != null) return false
         // by time among the chat's rows, not at the end (C8)
         val id = chats.insertMessage(conv.sessionId, m.role, m.text, m.attachments, m.createdAt * 1000)
-        store.putMessages(listOf(SyncMessage(id, m.mid, conv.sessionId, pushed = true, device = m.device, deviceName = m.deviceName)))
+        val landed = mutableListOf(SyncMessage(id, m.mid, conv.sessionId, pushed = true, device = m.device, deviceName = m.deviceName))
+        // The chat this phone keeps with that device says the same thing on its own side (C13):
+        // a round handed to a device runs on *its* conversation, so the relay files the line under
+        // the shared `cid` and the device's own chat would otherwise stand empty while its Muse is
+        // the one that answered. Under the relay's own `mid`, not a minted one: the copy is the
+        // same turn, and one id is what lets a tombstone arrive later and take both down at once
+        // ([SyncStore.messagesByMid]).
+        val home = if (conv.kind == "main" && m.device.isNotBlank() && m.device != deviceId) {
+            deviceChatFor(m.device)
+        } else {
+            null
+        }
+        if (home != null && home != conv.sessionId && store.messageByMidIn(m.mid, home) == null) {
+            val mirrorId = chats.insertMessage(home, m.role, m.text, m.attachments, m.createdAt * 1000)
+            landed += SyncMessage(mirrorId, m.mid, home, pushed = true, device = m.device, deviceName = m.deviceName)
+            touched += home
+            if (m.role == "assistant") replied += home
+        }
+        store.putMessages(landed)
         touched += conv.sessionId
         if (m.role == "assistant") replied += conv.sessionId
         return true
     }
 
     // ── the switch and the delete ─────────────────────────────────────────
-
     /** The person turned the switch: the relay first, then what this phone remembers. */
     suspend fun setEnabled(on: Boolean): SyncState {
         val state = api.setEnabled(on)

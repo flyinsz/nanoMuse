@@ -108,6 +108,13 @@ object RemoteTaskController {
          * marks it as such rather than treating the sentence as its own person's.
          */
         thread: String = "",
+        /**
+         * The id this phone already gave the sentence in its own chat (C13, impl §3, "单 mid").
+         * The round is written on the target under this same id rather than a fresh one, so the
+         * one sentence is one row on the relay and reads once on every device — including the two
+         * chats on this phone, whose rows are deduped by it.
+         */
+        mid: String = "",
     ): Outcome {
         // Contract C13, "owner 离线不发" (docs/session-handoff.md §3): a device the relay has
         // already marked away is not sent to at all. The hub would answer `device_offline` after a
@@ -136,6 +143,10 @@ object RemoteTaskController {
                     put("handoff", true)
                 }
             }
+            // C13 (impl §3, "单次推送（单 mid）"): the id of the row this phone wrote for the same
+            // sentence. The target writes its own row under it, so whoever pushes first the relay
+            // keeps one, and every device reads the sentence once.
+            .apply { if (mid.isNotBlank()) put("mid", mid) }
 
         // The questions of this run in flight: the target's `approval_id` → the id the card
         // here carries. Per call, not per object: two runs at once (two chats, a second run

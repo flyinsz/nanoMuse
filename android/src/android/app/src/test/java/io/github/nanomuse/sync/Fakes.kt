@@ -24,6 +24,9 @@ class MemorySyncStore : SyncStore {
     }
     override suspend fun messages(sessionId: String) = msgs.values.filter { it.sessionId == sessionId }
     override suspend fun messageByMid(mid: String) = msgs.values.firstOrNull { it.mid == mid }
+    override suspend fun messagesByMid(mid: String) = msgs.values.filter { it.mid == mid }
+    override suspend fun messageByMidIn(mid: String, sessionId: String) =
+        msgs.values.firstOrNull { it.mid == mid && it.sessionId == sessionId }
     override suspend fun pulledMessages() = msgs.values.filter { it.device.isNotBlank() }
     override suspend fun putMessages(list: List<SyncMessage>) {
         for (m in list) msgs[m.messageId] = m

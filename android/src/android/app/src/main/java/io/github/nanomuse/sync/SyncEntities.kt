@@ -93,6 +93,20 @@ interface SyncStore {
     suspend fun removeConversation(sessionId: String)
     suspend fun messages(sessionId: String): List<SyncMessage>
     suspend fun messageByMid(mid: String): SyncMessage?
+    /**
+     * Every row kept under one relay `mid`. The same turn may stand in two chats at once: the
+     * conversation the relay filed it under, and the chat this phone keeps with the device that
+     * wrote it (C13). A tombstone for that `mid` has to take both down.
+     */
+    suspend fun messagesByMid(mid: String): List<SyncMessage> = listOfNotNull(messageByMid(mid))
+    /**
+     * Whether one chat already holds a row under this relay `mid`. The same turn may stand in two
+     * chats at once (C13), so "do I know this `mid`" is asked per chat: the copy in the device's
+     * own chat must not block the row the relay filed under the shared conversation, nor the
+     * other way round.
+     */
+    suspend fun messageByMidIn(mid: String, sessionId: String): SyncMessage? =
+        messages(sessionId).firstOrNull { it.mid == mid }
     /** The rows that came from the relay with a device on them (pulled, not this phone's own). */
     suspend fun pulledMessages(): List<SyncMessage>
     suspend fun putMessages(list: List<SyncMessage>)
@@ -139,6 +153,9 @@ interface SyncDao {
 
     @Query("SELECT * FROM sync_messages WHERE mid = :mid")
     suspend fun messageByMid(mid: String): SyncMessage?
+
+    @Query("SELECT * FROM sync_messages WHERE mid = :mid")
+    suspend fun messagesByMid(mid: String): List<SyncMessage>
 
     @Query("SELECT * FROM sync_messages WHERE device != ''")
     suspend fun pulledMessages(): List<SyncMessage>
@@ -258,6 +275,7 @@ class RoomSyncStore(private val dao: SyncDao) : SyncStore {
     override suspend fun removeConversation(sessionId: String) = dao.removeConversation(sessionId)
     override suspend fun messages(sessionId: String): List<SyncMessage> = dao.messages(sessionId)
     override suspend fun messageByMid(mid: String): SyncMessage? = dao.messageByMid(mid)
+    override suspend fun messagesByMid(mid: String): List<SyncMessage> = dao.messagesByMid(mid)
     override suspend fun pulledMessages(): List<SyncMessage> = dao.pulledMessages()
     override suspend fun putMessages(list: List<SyncMessage>) {
         if (list.isNotEmpty()) dao.putMessages(list)

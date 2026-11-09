@@ -13,15 +13,33 @@ class SyncEngineTest {
     private val uuid = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
     /** A phone; the C7/C8 tests below were written with side chats on, C9's own tests set it per case. */
-    private class Phone(val relay: FakeRelay, val device: String, account: String = "acct-1", sideChats: Boolean = true) {
+    private class Phone(
+        val relay: FakeRelay,
+        val device: String,
+        account: String = "acct-1",
+        sideChats: Boolean = true,
+        /** Device hub id → the local chat this phone keeps with it (C13); empty for most tests. */
+        chatsFor: Map<String, String> = emptyMap(),
+    ) {
         val store = MemorySyncStore()
         val chats = MemoryChats()
         var clock = 1_700_000_000_000L
         var sideChats = sideChats
-        val engine = SyncEngine(store, chats, relay, device, account, now = { clock }, sideChats = { this.sideChats })
+        var deviceChats = chatsFor
+        val engine = SyncEngine(
+            store, chats, relay, device, account, now = { clock },
+            sideChats = { this.sideChats },
+            deviceChatFor = { hubId -> deviceChats[hubId] },
+        )
     }
 
-    private fun phone(relay: FakeRelay, device: String, account: String = "acct-1", sideChats: Boolean = true) = Phone(relay, device, account, sideChats)
+    private fun phone(
+        relay: FakeRelay,
+        device: String,
+        account: String = "acct-1",
+        sideChats: Boolean = true,
+        chatsFor: Map<String, String> = emptyMap(),
+    ) = Phone(relay, device, account, sideChats, chatsFor)
 
     @Test fun `first push mints a cid per chat and a mid per message, main as main`() = runTest {
         val relay = FakeRelay()
@@ -591,4 +609,79 @@ class SyncEngineTest {
         assertEquals(listOf(listOf("phone-a", cid, "working", "打开携程网站"), listOf("phone-a", cid, "waiting", "")), relay.stepCalls)
         assertTrue(relay.workingCalls.isEmpty())
     }
+
+    @Test fun `C13 a device's turn is mirrored into the chat with it, and the main chat keeps it too`() = runTest {
+        val relay = FakeRelay(mapOf("phone-a" to "Pixel 8", "pc-nas" to "nas"))
+        // this phone keeps a chat with pc-nas (the person tapped its face once)
+        val p = phone(relay, "phone-a", chatsFor = mapOf("pc-nas" to "nas-chat"))
+        p.chats.addSession("main"); p.chats.main = "main"
+        p.chats.addSession("nas-chat", "nas")
+        p.chats.user("main", "hi"); p.chats.assistant("main", "hello")
+        p.engine.push()
+        val cid = p.store.convs.getValue("main").cid
+
+        // the NAS ran a round on its own main conversation: relay files it under the shared cid
+        relay.seedMessage("pc-nas", cid, "mid-nas-q", "user", "nas question", 1_700_000_100)
+        relay.seedMessage("pc-nas", cid, "mid-nas-a", "assistant", "nas answer", 1_700_000_200)
+        p.engine.pull()
+
+        // both the main chat and the chat with the NAS hold the turn
+        assertEquals(4, p.chats.messages("main").size)
+        assertEquals(2, p.chats.messages("nas-chat").size)
+        // remembered under one mid each, so a tombstone reaches both copies
+        assertEquals(2, p.store.messagesByMid("mid-nas-a").size)
+        // a row from a device this phone has NO chat with stays in the main chat alone
+        relay.seedMessage("stranger-9", cid, "mid-str", "user", "from a stranger", 1_700_000_300)
+        p.engine.pull()
+        assertEquals(5, p.chats.messages("main").size)
+        assertEquals(2, p.chats.messages("nas-chat").size)
+    }
+
+    @Test fun `C13 a tombstone takes the mirrored copy down with the one the relay filed`() = runTest {
+        val relay = FakeRelay(mapOf("phone-a" to "Pixel 8"))
+        val p = phone(relay, "phone-a", chatsFor = mapOf("pc-nas" to "nas-chat"))
+        p.chats.addSession("main"); p.chats.main = "main"
+        p.chats.addSession("nas-chat", "nas")
+        p.chats.user("main", "hi"); p.chats.assistant("main", "hello")
+        p.engine.push()
+        val cid = p.store.convs.getValue("main").cid
+
+        relay.seedMessage("pc-nas", cid, "mid-x", "assistant", "gone soon", 1_700_000_100)
+        p.engine.pull()
+        assertEquals(2, p.store.messagesByMid("mid-x").size)
+
+        relay.msgs.getValue("mid-x").deleted = true
+        relay.msgs.getValue("mid-x").seq = ++relay.seq
+        p.engine.pull()
+        assertEquals(0, p.store.messagesByMid("mid-x").size)
+        // back to the two rows the main chat started with, and the mirrored copy is gone too
+        assertEquals(2, p.chats.messages("main").size)
+        assertEquals(0, p.chats.messages("nas-chat").size)
+    }
+
+    @Test fun `C13 a sentence this phone handed over is one row, whatever the target pushes back`() = runTest {
+        val relay = FakeRelay(mapOf("phone-a" to "Pixel 8", "pc-nas" to "nas"))
+        val p = phone(relay, "phone-a", chatsFor = mapOf("pc-nas" to "nas-chat"))
+        p.chats.addSession("main"); p.chats.main = "main"
+        p.chats.addSession("nas-chat", "nas")
+        p.engine.push()
+        val cid = p.store.convs.getValue("main").cid
+
+        // the phone wrote the sentence locally and registered the id it handed over (impl §3)
+        val lineId = p.chats.user("nas-chat", "hand this over")
+        p.store.putMessages(listOf(SyncMessage(lineId, "mid-hand", "nas-chat", pushed = true)))
+
+        // the target wrote its own row for the same sentence under the same mid, then the answer
+        relay.seedMessage("pc-nas", cid, "mid-hand", "user", "hand this over", 1_700_000_050)
+        relay.seedMessage("pc-nas", cid, "mid-reply", "assistant", "done, here is the answer", 1_700_000_100)
+        p.engine.pull()
+
+        // the sentence stands once in the chat it was typed in (the relay's copy is the same row)
+        val nasTexts = p.chats.messages("nas-chat").map { it.partsJson }
+        assertEquals("the chat with the NAS: the sentence once, then the answer", 2, nasTexts.size)
+        assertEquals(1, nasTexts.count { it.contains("hand this over") })
+        // the shared main chat holds the turn as it came in: the sentence and the answer
+        assertEquals(2, p.chats.messages("main").size)
+    }
+
 }
