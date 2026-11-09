@@ -6492,7 +6492,7 @@ class ChatViewModel(
             }
             override fun restoreDraft(text: String) { if (_inputText.value.isEmpty()) _inputText.value = text }
             override suspend fun session(): String = ensureSession()
-            override suspend fun user(sessionId: String, text: String) = nmAppendUserLine(sessionId, text)
+            override suspend fun user(sessionId: String, text: String) { nmAppendUserLine(sessionId, text) }
             override fun started(sessionId: String) {
                 SessionActivityTracker.setActive(sessionId) { nmRemoteBridge.cancel() }
             }
@@ -6636,7 +6636,16 @@ class ChatViewModel(
                 return@launch
             }
             // the person's line first, without the mention, exactly as typed after "@name"
-            nmAppendUserLine(targetSid, asked)
+            val lineId = nmAppendUserLine(targetSid, asked)
+            // C13 (impl §3, "单次推送（单 mid）"): the id this sentence carries everywhere. The
+            // target writes its own row for the same words under it, so the relay keeps one and
+            // every device reads the sentence once. Registered here, on the row this phone just
+            // wrote, so the copy arriving back by sync is recognised rather than drawn twice.
+            val handoffMid = io.github.nanomuse.sync.HandoffMid.of(
+                io.github.nanomuse.hub.Hub.deviceId(context), targetSid, lineId,
+            )
+            io.github.nanomuse.sync.ConversationSync.rememberHandoff(context, targetSid, lineId, handoffMid)
+            io.github.nanomuse.sync.ConversationSync.sent(targetSid)
             // The steps arrive on the hub's own thread and the bubble is written from here, so
             // they are queued as they come and drawn between the two suspends below.
             val steps = java.util.concurrent.LinkedBlockingQueue<String>()
@@ -6654,6 +6663,9 @@ class ChatViewModel(
                     // what makes a chat with it a way to carry on where it left off; without it the
                     // words arrive with no memory of the conversation they belong to.
                     thread = io.github.nanomuse.terminal.DeviceChat.MAIN_THREAD,
+                    // The id this phone's own row carries (see above): the target writes its row
+                    // under it, so the one sentence is one row on the relay.
+                    mid = handoffMid,
                     onStep = { step ->
                         val line = when (step) {
                             is io.github.nanomuse.terminal.RemoteTaskController.Step.Running -> step.text
@@ -6980,11 +6992,12 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun nmAppendUserLine(sid: String, text: String) {
+    private suspend fun nmAppendUserLine(sid: String, text: String): String {
         val partsJson = """[{"type":"text","value":${escapeJson(text)}}]"""
         val entity = chatRepository.appendMessage(sid, "user", partsJson)
         agentHistory.add(LLMMessage(role = LLMMessage.Role.USER, content = text))
         _messages.value = _messages.value + ChatMessage(id = entity.id, role = "user", content = text)
+        return entity.id
     }
 
     private suspend fun nmAppendAssistantLine(sid: String, text: String) {
