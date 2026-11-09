@@ -2008,6 +2008,8 @@ def create_app(
 
         @app.get("/v1/devices")
         async def devices(caller: Caller = Depends(hub_dep)) -> dict:
+            # No `this` here: an HTTP caller carries no device identity (see `Caller`), and the
+            # clients that need the mark read it from the hub's own frames, which do.
             return {"devices": hub.devices(caller.account_id)}
 
         @app.delete("/v1/devices/{device_id}", status_code=204)

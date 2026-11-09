@@ -6649,6 +6649,12 @@ class ChatViewModel(
             // The steps arrive on the hub's own thread and the bubble is written from here, so
             // they are queued as they come and drawn between the two suspends below.
             val steps = java.util.concurrent.LinkedBlockingQueue<String>()
+            // C13 §4: the run's words as they are written make one bubble that grows, not a
+            // queue of finished lines — the answer is read while it is being made. The id is
+            // the bubble's own and never reaches the database: the turn's own text is what is
+            // kept (see below), and this one only holds the screen while that is on its way.
+            val live = StringBuilder()
+            var liveId: String? = null
             val outcome = withContext(Dispatchers.IO) {
                 io.github.nanomuse.terminal.RemoteTaskController.send(
                     context = context,
@@ -6667,17 +6673,37 @@ class ChatViewModel(
                     // under it, so the one sentence is one row on the relay.
                     mid = handoffMid,
                     onStep = { step ->
-                        val line = when (step) {
-                            is io.github.nanomuse.terminal.RemoteTaskController.Step.Running -> step.text
-                            is io.github.nanomuse.terminal.RemoteTaskController.Step.Done ->
-                                if (step.ok) step.text
-                                else context.getString(R.string.nm_device_step_failed, step.text)
-                            is io.github.nanomuse.terminal.RemoteTaskController.Step.Said -> step.text
+                        // A piece of the answer while it is being written (C13 §4): appended to
+                        // the bubble this turn already opened, on the main thread, so the words
+                        // grow on screen. It is dropped from the *queue* path below — a growing
+                        // bubble and a queue of finished lines are two different readings of the
+                        // same turn, and drawing both would say everything twice.
+                        if (step is io.github.nanomuse.terminal.RemoteTaskController.Step.Partial) {
+                            val piece = step.text
+                            viewModelScope.launch(Dispatchers.Main.immediate) {
+                                live.append(piece)
+                                val shown = live.toString()
+                                val id = liveId ?: nmAppendLiveAssistantLine(targetSid, shown)
+                                    .also { liveId = it }
+                                if (liveId == id) nmUpdateLiveAssistantLine(targetSid, id, shown)
+                            }
+                        } else {
+                            val line = when (step) {
+                                is io.github.nanomuse.terminal.RemoteTaskController.Step.Running -> step.text
+                                is io.github.nanomuse.terminal.RemoteTaskController.Step.Done ->
+                                    if (step.ok) step.text
+                                    else context.getString(R.string.nm_device_step_failed, step.text)
+                                is io.github.nanomuse.terminal.RemoteTaskController.Step.Said -> step.text
+                                is io.github.nanomuse.terminal.RemoteTaskController.Step.Partial -> ""
+                            }
+                            if (line.isNotBlank()) steps.add("${device.name}: $line")
                         }
-                        if (line.isNotBlank()) steps.add("${device.name}: $line")
                     },
                 )
             }
+            // The turn is over and its own text is about to be written below: the bubble that grew
+            // while it was being made goes first, or the same answer would stand twice.
+            nmDropLiveAssistantLine(liveId)
             while (true) {
                 val line = steps.poll() ?: break
                 nmAppendAssistantLine(targetSid, line)
@@ -6694,7 +6720,19 @@ class ChatViewModel(
                 io.github.nanomuse.terminal.RemoteTaskController.Outcome.Offline ->
                     context.getString(R.string.nm_device_executor_offline, device.name)
             }
-            nmAppendAssistantLine(targetSid, said)
+            // C13 (impl §3, "单次推送（单 mid）"): the answer already went up from the device that
+            // wrote it, under the id it named. This phone's own row for the same words is written
+            // under that id and marked pushed, so the relay keeps one row and no device — this one
+            // included — reads the answer twice. A target that named no id (an older runtime)
+            // is answered the old way: the row goes up from here under an id of its own.
+            val answerMid = (outcome as? io.github.nanomuse.terminal.RemoteTaskController.Outcome.Answered)?.mid
+                ?.takeIf { it.isNotBlank() }
+            if (answerMid != null) {
+                val lineId = nmAppendAssistantLine(targetSid, said)
+                io.github.nanomuse.sync.ConversationSync.rememberHandoff(context, targetSid, lineId, answerMid)
+            } else {
+                nmAppendAssistantLine(targetSid, said)
+            }
         }
     }
 
@@ -7000,7 +7038,49 @@ class ChatViewModel(
         return entity.id
     }
 
-    private suspend fun nmAppendAssistantLine(sid: String, text: String) {
+    /**
+     * A bubble for an answer another device is writing right now (C13 §4), opened once and grown
+     * in place ([nmUpdateLiveAssistantLine]). It reaches no database and no agent history: the
+     * turn's own text is what is kept when it arrives (see `nmDeliverToDevice`), and a partial
+     * that were persisted would be re-read as a finished reply — and pushed to the account as
+     * this phone's own words, which it is not. A run stopped halfway therefore leaves nothing
+     * behind but the note that says it stopped.
+     *
+     * Returns the id the bubble carries in [_messages], which is what the caller grows.
+     */
+    private fun nmAppendLiveAssistantLine(sid: String, text: String): String {
+        val id = "nm-live-${sid}-${System.nanoTime()}"
+        _messages.value = _messages.value + ChatMessage(
+            id = id,
+            role = "assistant",
+            content = text,
+            isStreaming = true,
+            toolBlocks = listOf(AssistantBlock(id = "${id}_text", kind = "text", content = text)),
+        )
+        return id
+    }
+
+    /** One more piece of an answer already on screen: the same bubble, its text replaced. */
+    private fun nmUpdateLiveAssistantLine(sid: String, id: String, text: String) {
+        val list = _messages.value
+        val i = list.indexOfFirst { it.id == id }
+        if (i < 0) return
+        _messages.value = list.toMutableList().also {
+            it[i] = it[i].copy(
+                content = text,
+                toolBlocks = listOf(AssistantBlock(id = "${id}_text", kind = "text", content = text)),
+            )
+        }
+    }
+
+    /** The turn is over: the live bubble goes, because the real one is about to be written. */
+    private fun nmDropLiveAssistantLine(id: String?) {
+        if (id == null) return
+        _messages.value = _messages.value.filterNot { it.id == id }
+    }
+
+    /** Writes one whole line of an answer into the chat's own log; returns the row's id. */
+    private suspend fun nmAppendAssistantLine(sid: String, text: String): String {
         val parts = listOf<AgentContentPart>(AgentContentPart.Text(text))
         val entity = chatRepository.appendMessage(sid, "assistant", buildAssistantPartsJson(parts))
         agentHistory.add(LLMMessage(role = LLMMessage.Role.ASSISTANT, content = text, contentParts = parts))
@@ -7012,6 +7092,7 @@ class ChatViewModel(
             content = text,
             toolBlocks = listOf(AssistantBlock(id = "${entity.id}_text", kind = "text", content = text)),
         )
+        return entity.id
     }
     // ───────────────────────────────────────────────────────────────────────
 

@@ -1482,6 +1482,31 @@ class ConversationSync:
                 return ev
         return None
 
+    def _find_twin(self, thread: Thread, role: str, text: str) -> dict[str, Any] | None:
+        """A row already here that says exactly what ``row`` says (C13, impl §3).
+
+        One sentence reaches this device more than once when a run is handed to another machine:
+        the machine that answered pushes its row, the device that asked pushes its own for the
+        same words, and if the two carry different ids both are filed. The id is the fix — the
+        asking device names its row in the `task` frame and the answer comes back under that same
+        id — but an id cannot be checked against a row written before the fix, and a *lost* id
+        costs a duplicate every time. This is the second line of defence: the same words, in the
+        same role, in the same conversation, are one event.
+
+        Only a synced row is a candidate: this device's own line for the turn it started is its
+        own, and matching it would drop the answer into the question's bubble. Empty text never
+        matches, or every blank notice would collapse into one.
+        """
+        body = text.strip()
+        if not body:
+            return None
+        for ev in thread.timeline.events:
+            if not ev.get("synced") or ev.get("type") != role:
+                continue
+            if str(ev.get("text") or "").strip() == body:
+                return ev
+        return None
+
     def _apply_message(self, row: dict[str, Any]) -> None:
         cid = str(row.get("cid") or "")
         mid = str(row.get("mid") or "")
@@ -1509,6 +1534,10 @@ class ConversationSync:
         if role not in ("user", "assistant"):
             return
         text = str(row.get("text") or "")
+        # A handed-over run answers under the asking device's own id, so the two rows collapse by
+        # `mid`; this catches the ones that predate that, or whose id was lost on the way.
+        if self._find_twin(thread, role, text) is not None:
+            return
         event: dict[str, Any] = {
             "type": role,
             "text": text,

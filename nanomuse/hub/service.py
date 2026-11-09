@@ -972,7 +972,7 @@ class HubService:
                 mid=str(call.args.get("mid") or "")[:64],
             )
             self._incoming[call.id] = _IncomingTask(thread.id, thread.worker)
-            final = await asyncio.wait_for(
+            final, final_mid = await asyncio.wait_for(
                 self._relay_run(thread, call, queue), timeout=TASK_TIMEOUT_S
             )
         except TimeoutError:
@@ -998,6 +998,11 @@ class HubService:
                 "conversation": conversation,
                 "thread": thread.id,
                 "device": self.device_name,
+                # The id these words go up under here (C13, impl §3): the caller writes its own
+                # row for the same answer with this id, so the relay keeps one and every device
+                # reads it once. Absent when there is no final text, or when the answer was
+                # another device's own and already pushed under an id of its own.
+                **({"mid": final_mid} if final_mid and final else {}),
             }
         )
 
@@ -1022,12 +1027,24 @@ class HubService:
 
     async def _relay_run(
         self, thread: Thread, call: IncomingCall, queue: asyncio.Queue[dict[str, Any]]
-    ) -> str:
+    ) -> tuple[str, str]:
         """Follow the run in ``thread`` on the bus; send its steps to the caller; return
-        the final answer once the thread is idle again."""
+        the final answer and the id it goes up under, once the thread is idle again.
+
+        The id travels back with the text (C13, impl §3): the caller writes its own row for these
+        words, and one sentence must be one id on the relay. Without it the caller mints a second
+        and the same answer is filed twice — which every device then reads twice, and which the
+        running model's own context holds twice. Empty when the answer came from another device:
+        that device has already pushed its own row under its own id.
+        """
         started = False
         stopped = False
         final = ""
+        # The id the answer will go up under (C13, impl §3, "单次推送（单 mid）"). The caller
+        # writes its own row for these words, and both must carry one id or the relay keeps two:
+        # one from us and one from it. Minted here, on the event itself, so the push that follows
+        # reuses it rather than minting a second (`sync/engine.py._unsynced` reads `ev["mid"]`).
+        final_mid = ""
         while True:
             msg = await queue.get()
             kind = msg.get("kind")
@@ -1039,6 +1056,9 @@ class HubService:
                     continue
                 if ev.get("type") == "assistant" and ev.get("text") and not ev.get("quiet"):
                     final = str(ev["text"])
+                    if not final_mid and not ev.get("via_device"):
+                        final_mid = str(ev.get("mid") or "") or str(uuid.uuid4())
+                        ev["mid"] = final_mid
                 elif ev.get("type") == "notice" and ev.get("text") == STOPPED_NOTICE:
                     stopped = True
                 await self._forward_event(call, ev, fresh=kind == "event")
@@ -1060,7 +1080,9 @@ class HubService:
                 await self._forward_stream(call, kind, msg)
         if stopped:
             raise _RunStopped
-        return final or self.svc.ui.last_assistant_text.get(thread.id, "")
+        if not final:
+            final = self.svc.ui.last_assistant_text.get(thread.id, "")
+        return final, final_mid
 
     async def _forward_stream(self, call: IncomingCall, kind: str, msg: dict[str, Any]) -> None:
         """One streaming frame, as a task event for the caller. ``delta`` and

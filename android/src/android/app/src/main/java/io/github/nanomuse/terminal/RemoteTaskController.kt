@@ -53,6 +53,14 @@ object RemoteTaskController {
         data class Running(val text: String) : Step
         data class Done(val text: String, val ok: Boolean) : Step
         data class Said(val text: String) : Step
+
+        /**
+         * A piece of what the run is writing right now: an *increment*, not a whole block
+         * (C13 §4). The caller appends it to the answer it is already drawing, so the words
+         * arrive as they are written rather than only at the turn's end. The final text still
+         * comes as one whole block, so a lost piece costs a few words and never the answer.
+         */
+        data class Partial(val text: String) : Step
     }
 
     /**
@@ -64,7 +72,13 @@ object RemoteTaskController {
      * line over the box uses).
      */
     sealed interface Outcome {
-        data class Answered(val text: String) : Outcome
+        /**
+         * The target's own words, and the id they already went up under there ([mid]). The caller
+         * writes its row for the same answer with that id, so one sentence is one row on the relay
+         * rather than two (C13, impl §3). [mid] is blank when the target named none, which is what
+         * an older runtime answers: the caller then mints its own, as it always did.
+         */
+        data class Answered(val text: String, val mid: String = "") : Outcome
         data class Failed(val reason: String) : Outcome
         data object Stopped : Outcome
         data object Offline : Outcome
@@ -213,6 +227,15 @@ object RemoteTaskController {
                             onStep(Step.Said(said.take(400)))
                         }
                     }
+                    // C13 §4, the run's words as they are written: `delta` carries an increment
+                    // (`partial: true`), unlike the whole-block `text` above. The caller appends
+                    // it to the bubble it already opened, so the answer grows on screen instead
+                    // of arriving only when the turn is over. Reasoning is not drawn as prose —
+                    // it is the model's own thinking — so it opens no bubble of its own.
+                    "delta" -> {
+                        val piece = event.optString("text")
+                        if (piece.isNotEmpty()) onStep(Step.Partial(piece))
+                    }
                     else -> Unit
                 }
             }
@@ -236,10 +259,14 @@ object RemoteTaskController {
 
         if (stopFlag()) return Outcome.Stopped
         val answer = result.optString("text").trim().ifBlank { result.optString("answer").trim() }
+        // The id those words already went up under here (C13, impl §3): the caller writes its own
+        // row for the same answer with this id, so one sentence is one row on the relay. Blank
+        // when the target sent none (an older runtime), and the caller mints its own as before.
+        val mid = result.optString("mid")
         // An empty answer is not an answer (issue 718): steps having run does not make it one,
         // and showing it as done is how the phone came to say "finished" for work never done.
         return if (answer.isEmpty()) Outcome.Failed("${device.name} finished without an answer")
-        else Outcome.Answered(answer)
+        else Outcome.Answered(answer, mid)
     }
 
     /**

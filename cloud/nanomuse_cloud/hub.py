@@ -271,8 +271,17 @@ class Hub:
             "refused_connections": self.refused_connections,
         }
 
-    def devices(self, account_id: str) -> list[dict]:
-        """Remembered devices with their presence, then the browser tabs, newest first."""
+    def devices(self, account_id: str, self_id: str = "") -> list[dict]:
+        """Remembered devices with their presence, then the browser tabs, newest first.
+
+        ``self_id`` is the device the list is *for*. The row it names carries ``this``, because
+        the one reading the list has to know which of the account's Muses is the one holding the
+        phone (C13): every client draws its own face differently, and a tap on it means "back to
+        my own chat" rather than "open a chat with this device". One frame cannot serve every
+        reader — the mark is per reader, which is why it is a parameter and not a field of the
+        list. A caller that names nobody gets no mark: an operator console reads the list as a
+        list, not as somebody's account.
+        """
         live = self.online.get(account_id, {})
         out: list[dict] = []
         seen: set[str] = set()
@@ -291,6 +300,7 @@ class Hub:
                     "last_seen": now() if c else int(row["last_seen"]),
                     "controllable": row["kind"] != "web",
                     "ip": (c.ip if c else "") or row["ip"],
+                    "this": row["id"] == self_id,
                 }
             )
         for c in live.values():
@@ -308,6 +318,7 @@ class Hub:
                     "last_seen": now(),
                     "controllable": c.kind != "web",
                     "ip": c.ip,
+                    "this": c.device_id == self_id,
                 }
             )
         out.sort(key=lambda d: (not d["online"], d["kind"] == "web", -d["last_seen"]))
@@ -321,8 +332,11 @@ class Hub:
         self._device_sets[account_id] = frozenset(self.online.get(account_id, {}))
         if not conns:
             return
-        frame = {"type": "devices", "devices": self.devices(account_id)}
-        await asyncio.gather(*(c.send(frame) for c in conns))
+        # One frame per reader: the `this` mark names the reader's own device, so a single
+        # shared frame cannot carry it (see `devices`).
+        await asyncio.gather(
+            *(c.send({"type": "devices", "devices": self.devices(account_id, c.device_id)}) for c in conns)
+        )
 
     async def _refresh_devices(self, account_id: str) -> None:
         """Send the device list again when who is online has changed since it last went out.
@@ -477,7 +491,7 @@ class Hub:
                 {
                     "type": "welcome",
                     "device_id": conn.device_id,
-                    "devices": self.devices(conn.account_id),
+                    "devices": self.devices(conn.account_id, conn.device_id),
                     "server": {"version": __version__, "frame_limit": self.frame_limit, "time": now(), "features": FEATURES},
                 }
             )
@@ -654,7 +668,9 @@ class Hub:
             # it has moved, and nothing goes out when it has not.
             await self._refresh_devices(conn.account_id)
         elif kind == "devices":
-            await conn.send({"type": "devices", "devices": self.devices(conn.account_id)})
+            await conn.send(
+                {"type": "devices", "devices": self.devices(conn.account_id, conn.device_id)}
+            )
         elif kind == "call":
             await self._call(conn, frame)
         elif kind == "event" and not frame.get("id"):
