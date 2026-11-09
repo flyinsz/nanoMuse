@@ -31,6 +31,8 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 
 ### Runtime
 
+- **A round handed to another device is one row on the relay, not two.** A sentence sent to a device is written into the asking device's own chat at once, and the device that runs it writes its own row for the same words. Each went up under an id of its own, and the relay keeps one row per id, so both landed: every device read the sentence twice and the asking model's own context held it twice. The `task` frame now carries the id the caller minted and `Service.send` writes it onto the `user` event, so the sync push reuses it instead of minting a fresh one. A caller that sends no id is unchanged.
+
 - **An appointment a feed dated only with `RDATE` no longer disappears from the agenda.** The reader took DTSTART, unrolled RRULE and dropped EXDATE dates, and had nowhere to put a date named on its own `RDATE` line, which Outlook and iCloud feeds use for one-off additions to a series. Those dates are occurrences now, an all-day one is a whole day, and an EXDATE on one still cancels it. A PERIOD value is skipped rather than given the event's own length.
 
 - Stopped timed-out remote tasks by their original call id, allowed the full 15-minute task budget from the runtime and iPhone, and kept late stop requests from cancelling a newer task. For #805.
@@ -73,6 +75,8 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 
 ### Desktop
 
+- **The chat kept with a device holds that device's turns, and shows them as they are written.** A round handed to a device runs on *that* device's own conversation, so the relay files the turn under the account's main conversation and the chat this computer keeps with the device stood empty while its Muse was the one answering. Such a turn is written into that chat as well, under the same message id, so a deletion arriving later reaches both. A running round is matched by the device running it as well as by the conversation the relay resolved it to, so the live words and steps draw in that chat too. A device with no chat here is left where the relay filed it.
+
 - **Kept plugin choices across desktop restarts.** Startup preserved the saved bundle list and its order instead of replacing it with defaults, keeping enabled agent teams and automatic authorization review enabled and disabled automations disabled. For [#731](https://github.com/nano-muse/nanoMuse/issues/731).
 
 - Counted remote coding tools once using the originating agent's counting phase, excluded notes, and reconciled the count with the final result.
@@ -108,6 +112,8 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 - **A chat another device sends a task to, and every chat the rooms open, start in the `~/nanoMuse` workspace** instead of the bare home folder. On Windows a workspace that is the whole profile folder could not run a single `workspace-write` command: the sandbox's temp root lies inside it, and a session begun from the web console or the phone failed at the first step. ([#705](https://github.com/nano-muse/nanoMuse/issues/705))
 
 ### Android
+
+- **The chat kept with a device holds that device's turns, shows them as they are written, and one sentence is one message.** A round handed to a device runs on *that* device's own conversation, so the relay files the turn under the account's main conversation and the chat this phone keeps with the device stood empty while its Muse was the one answering; such a turn is now written into that chat as well, and a running round is matched by the device running it, so the live words and steps draw there too. A sentence handed over also carries one message id everywhere: the phone mints it, writes it on its own row and sends it in the `task` frame, so the relay keeps one row and the copy arriving back by sync is recognised rather than drawn twice. A deletion reaches both copies. A device with no chat here is left where the relay filed it.
 
 - Resumed interrupted Android backup exports with verified category checkpoints and explicit resume or discard choices.
 - Recovered interrupted Android restore categories before opening their repositories, retaining snapshots when recovery failed.

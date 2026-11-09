@@ -237,3 +237,55 @@ Android / iOS 若也要做，同样走侧信道，不得改用户消息文本。
 
 - 只改自己那一栏的文件；**不 commit**；不动版本号 / `CHANGELOG.md`；`web/` 不许跑 `npm run build`（本轮无人动 web）。
 - 回报：改了哪些文件 + 行号、检查命令**实际输出**、不确定处。
+
+---
+
+# 阶段一收尾：单 mid + 专属会话镜像（已完成）
+
+阶段一的 W1（中继）与 W2（运行时）先落了归属、`thread` / `handoff`、跨端互斥与流式
+上行；本刀补上**边界清单第 2 条（同一消息双 mid 双气泡）**，并把「一轮跨设备对话画在
+哪」定下来（`docs/session-handoff.md` §八）。
+
+## 运行时（`nanomuse`）
+
+1. `server/service.py` 的 `Service.send()` 增可选参数 `mid: str = ""`；非空时写进
+   `event_data["mid"]`，让 `sync/engine.py` 的 `_unsynced()` 复用而不是新铸一个。
+2. `hub/service.py` 的 `_task()` 从 `call.args` 读 `mid`（截 64 位）转给 `svc.send()`。
+3. 测试：`tests/test_hub.py` 与 `tests/test_sync.py`，**86 passed**。
+
+## Mac（`harness/dsh-nanomuse`）
+
+1. `src/sync.ts`：`SyncState.mirrored`（`mid → 该行另外写到哪些会话`）；
+   `SyncEngineOptions.deviceChatFor`；`applyMessage` 在写完中继指的会话后，若该 device
+   在本机有会话则再 `keep` 一份；tombstone 按 `mid` 把两份都 `forget`；`kept()` 认镜像；
+   `forAccount` / `migrate` 一并重置 `mirrored`。
+2. `src/client/stream-view.ts`：`streamBubbles` 增 `deviceOf`，按 `from` 也匹配。
+3. `src/client/StreamBubbles.ts`：从 `hub.deviceChats` 反查会话属于哪台设备。
+4. `src/cloud.ts`：把 `state.deviceChats` 作为 `deviceChatFor` 交给引擎。
+5. 检查：`npm run build && npm run typecheck && npm test` → **590 pass / 1 fail**
+   （`cloud-capacity.test.mjs` 缺 `@deepseek-ai/dsh-llm-pi-ai`，预存在）。
+
+## Android（`android/src/android`）
+
+1. 新文件 `io/github/nanomuse/sync/HandoffMid.kt`：`of(device, sessionId, lineId)` =
+   SHA-256 前 32 位（形状对齐中继 `valid_id`，语义对齐 Mac `deriveMid`）。
+2. `sync/SyncEngine.kt`：`deviceChatFor` 构造参数；`applyMessage` 镜像一份到该 device
+   的会话（同 `mid`）；去重改按会话（`messageByMidIn`）；tombstone 用 `messagesByMid`
+   删全部副本。
+3. `sync/SyncEntities.kt`：`SyncStore.messagesByMid` / `messageByMidIn`（带默认实现）+
+   `RoomSyncStore` 实现 + `SyncDao` 查询。
+4. `sync/ConversationSync.kt`：`deviceChatFor` 接上；`streamsFor` 按 device 也匹配；
+   新增 `rememberHandoff(context, sessionId, messageId, mid)`（把本地那行登记为已推）。
+5. `terminal/DeviceChat.kt`：新增只读的 `existingFor(context, repo, hubId)`。
+6. `terminal/RemoteTaskController.kt`：`send(..., mid: String = "")`，非空时 `put("mid", mid)`。
+7. `com/openminis/app/ui/chat/ChatViewModel.kt`：`nmAppendUserLine` 返回行 id；
+   `nmDeliverToDevice` 派生 mid → `rememberHandoff` → `sent()` → 传 `mid`。
+8. 检查：`compileDebugKotlin` ✅；`testDebugUnitTest --tests "io.github.nanomuse.sync.*"`
+   29 用例全过（新增 3 条 C13 用例）；全量单测仅 `FeedSandboxScopeTest` 失败（预存在，
+   root 环境必失败）。
+
+## 未做
+
+- 中继未加测试（`test_hub.py` 在本机基线自身 hang 在第 23 个用例）。
+- iOS 未跟（阶段五）。
+- 「专属会话各自一个 cid」被否，理由见 `docs/session-handoff.md` §八。
