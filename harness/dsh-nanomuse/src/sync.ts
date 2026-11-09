@@ -513,6 +513,14 @@ export interface SyncState {
   conversations: Record<string, KnownConversation>
   /** mid → the session it was appended to: a row goes into a log once. */
   pulled: Record<string, string>
+  /**
+   * mid → the chats a row was *also* written into (C13), beyond the one [pulled] names. A round
+   * handed to a device runs on that device's own main conversation, so the relay files it under
+   * the account's main conversation; when this computer keeps a chat with that device, the row
+   * belongs there too. Kept apart from [pulled] so the pair can be removed together when the row
+   * is deleted elsewhere (`hidden` holds the mid, and both sessions drop it).
+   */
+  mirrored?: Record<string, string[]>
   /** Rows deleted elsewhere after they were appended here: a log forgets nothing, the browser half hides them. */
   hidden: string[]
   /** Sessions whose conversation was deleted elsewhere: the browser half archives them (the host has no archive) and reports back. */
@@ -540,6 +548,7 @@ export function migrate(state: SyncState | undefined): SyncState {
     next.cursor = 0
     next.conversations = {}
     next.pulled = {}
+    next.mirrored = {}
     next.hidden = []
     next.toArchive = []
   }
@@ -556,7 +565,7 @@ export function migrate(state: SyncState | undefined): SyncState {
  * longer the main chat here.
  */
 export function forAccount(state: SyncState, accountId: string): SyncState {
-  const next: SyncState = { ...state, accountId, cursor: 0, conversations: {}, pulled: {}, hidden: [], toArchive: [] }
+  const next: SyncState = { ...state, accountId, cursor: 0, conversations: {}, pulled: {}, mirrored: {}, hidden: [], toArchive: [] }
   const mainOwner = state.owners[state.mainSession]
   if (mainOwner && mainOwner !== accountId) next.mainSession = ''
   return next
@@ -572,6 +581,13 @@ export interface SyncEngineOptions {
   isTaskSession?(sessionId: string): boolean
   /** A chat the rooms ran for themselves (the feed's daily batch): the agent's workbench, never synced. */
   isBatchSession?(sessionId: string): boolean
+  /**
+   * The chat this computer keeps with a device, when it has one (C13). A turn that arrived from
+   * that device is written into it as well as into the conversation the relay filed it under, so
+   * the chat with that device's Muse holds what that Muse has been saying. Undefined (and a
+   * device with no chat of its own) leaves the turn where the relay put it.
+   */
+  deviceChatFor?(deviceId: string): string | undefined
   load(): SyncState | undefined
   save(state: SyncState): Promise<void>
   /** The view changed: tell the browser half. */
@@ -1025,7 +1041,10 @@ export class SyncEngine {
 
   /** Whether a session shows turns from the other devices (a pulled row, or one hidden). */
   private kept(sessionId: string): boolean {
-    return Object.values(this.state.pulled).includes(sessionId)
+    if (Object.values(this.state.pulled).includes(sessionId)) return true
+    // a chat a turn was mirrored into holds another device's words too (C13), so it is kept the
+    // same way: its own turns are not anchors, but the browser half re-reads what it holds
+    return Object.values(this.state.mirrored ?? {}).some((sessions) => sessions.includes(sessionId))
   }
 
   /** Whether a session's turns go up: not another device's task, not a batch of the rooms', not another account's (C10), and a side chat only when the switch is on (C9). */
@@ -1462,6 +1481,12 @@ export class SyncEngine {
         if (!this.state.hidden.includes(m.mid)) this.state.hidden.push(m.mid)
         await this.options.sessions.forget(kept, m.mid).catch(() => undefined)
       }
+      // the copy in the chat with the device that wrote it comes down with it: one row, one
+      // deletion, whichever of the two chats it is read in
+      for (const mirror of this.state.mirrored?.[m.mid] ?? []) {
+        await this.options.sessions.forget(mirror, m.mid).catch(() => undefined)
+      }
+      if (this.state.mirrored) delete this.state.mirrored[m.mid]
       return
     }
     // once is enough: a row kept here already, or our own words coming back
@@ -1487,6 +1512,24 @@ export class SyncEngine {
       notes.set(sessionId, [...(notes.get(sessionId) ?? []), line])
     } catch (error: unknown) {
       this.log('warn', `nanomuse sync: a turn from ${m.device_name || 'another device'} did not reach its chat: ${message(error)}`)
+      return
+    }
+    // The chat this computer keeps with that device says the same thing on its own side (C13):
+    // a round handed to a device runs on *its* conversation, so the relay files the turn under
+    // the shared one and that device's own chat would otherwise stand empty while its Muse is the
+    // one that answered. Kept under the same `mid` in a second log, so one deletion reaches both.
+    const deviceChat = m.device ? this.options.deviceChatFor?.(m.device) : undefined
+    if (deviceChat && deviceChat !== sessionId) {
+      try {
+        await this.options.sessions.keep(deviceChat, line)
+        this.state.mirrored = {
+          ...(this.state.mirrored ?? {}),
+          [m.mid]: [...(this.state.mirrored?.[m.mid] ?? []), deviceChat],
+        }
+        notes.set(deviceChat, [...(notes.get(deviceChat) ?? []), line])
+      } catch (error: unknown) {
+        this.log('warn', `nanomuse sync: a turn from ${m.device_name || 'another device'} did not reach the chat with it: ${message(error)}`)
+      }
     }
   }
 

@@ -1072,6 +1072,10 @@ export default class NanomuseCloud extends Service {
         isTaskSession: (sessionId) => Object.values(this.state.taskSessions ?? {}).includes(sessionId),
         // the rooms come up after this service, so they are looked up at the time of asking
         isBatchSession: (sessionId) => (this.ctx.get('nanomuseRooms') as { isBatch?(id: string): boolean } | undefined)?.isBatch?.(sessionId) === true,
+        // C13: a turn from a device this computer keeps a chat with is written into that chat too,
+        // so the chat with its Muse holds what its Muse has been saying. Read-only, from the same
+        // mapping the device row uses (`state.deviceChats`, device id → session id).
+        deviceChatFor: (deviceId) => this.state.deviceChats?.[deviceId],
         load: () => this.state.sync,
         save: async (state) => {
           this.state.sync = state

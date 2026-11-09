@@ -1226,3 +1226,59 @@ test('a failed local mapping save prevents upload and the next attempt can recov
   await e.push()
   assert.equal(relay.msgs.size, 1)
 })
+
+test('C13 a device\u2019s turn is written into the chat with it as well as the relay\u2019s conversation', async () => {
+  // A round handed to a device runs on *that* device's own main conversation, so the relay files
+  // it under the account's main cid. The chat this computer keeps with that device is where the
+  // person watching it is looking; without the mirror it stands empty while that Muse answers.
+  const relay = fakeRelay()
+  const sessions = fakeSessions()
+  sessions.add('s-main', 'Main chat', [])
+  sessions.add('s-nas', 'nas', [])
+  const { engine: e } = engine(relay, sessions, {
+    // the main chat already carries the account's conversation (as it does after a first pull)
+    state: { ...emptyState(), sideChats: true, mainSession: 's-main', cids: { 's-main': 'c1' } },
+    options: { deviceChatFor: (deviceId) => (deviceId === 'nas-1' ? 's-nas' : undefined) },
+  })
+  await e.setMain('s-main')
+  relay.add('c1', 'main', 'Main chat', 'pc-1', 'Desk')
+  await e.pull()
+
+  // the NAS runs a round; the relay files it under the shared main conversation
+  relay.say('c1', 'user', 'question from the NAS', 'nas-1', 'nas')
+  relay.say('c1', 'assistant', 'answer from the NAS', 'nas-1', 'nas')
+  await e.pull()
+
+  const mainRows = sessions.remote('s-main').map((l) => l.text)
+  const nasRows = sessions.remote('s-nas').map((l) => l.text)
+  assert.ok(mainRows.includes('answer from the NAS'), 'the main chat keeps it, as before')
+  assert.ok(nasRows.includes('answer from the NAS'), 'and the chat with the NAS holds it too')
+  assert.ok(nasRows.includes('question from the NAS'))
+
+  // a device this computer has no chat with is left where the relay filed it
+  relay.say('c1', 'user', 'from a stranger', 'ghost-9', 'ghost')
+  await e.pull()
+  assert.ok(!sessions.remote('s-nas').map((l) => l.text).includes('from a stranger'))
+})
+
+test('C13 a turn deleted elsewhere leaves the chat with the device too', async () => {
+  const relay = fakeRelay()
+  const sessions = fakeSessions()
+  sessions.add('s-main', 'Main chat', [])
+  sessions.add('s-nas', 'nas', [])
+  const { engine: e } = engine(relay, sessions, {
+    state: { ...emptyState(), sideChats: true, mainSession: 's-main', cids: { 's-main': 'c1' } },
+    options: { deviceChatFor: (deviceId) => (deviceId === 'nas-1' ? 's-nas' : undefined) },
+  })
+  await e.setMain('s-main')
+  relay.add('c1', 'main', 'Main chat', 'pc-1', 'Desk')
+  await e.pull()
+  const mid = relay.say('c1', 'assistant', 'gone soon', 'nas-1', 'nas')
+  await e.pull()
+  assert.equal(sessions.remote('s-nas').length, 1)
+
+  relay.msgs.get(mid).deleted = true
+  relay.msgs.get(mid).seq = ++relay.seq
+  await e.pull()
+  assert.deepEqual(sessions.forgotten.filter(([sid]) => sid === 's-nas').map(([, m]) => m), [mid])
+})

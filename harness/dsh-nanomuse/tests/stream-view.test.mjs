@@ -88,3 +88,28 @@ test('a step reads as the tool and what it found; a bare call is just its name',
   assert.equal(toolLine(tool({ name: 'read_file', stage: 'result', summary: '12 lines' })), 'read_file \u00b7 12 lines')
   assert.equal(toolLine(tool({ name: 'grep', summary: '   ' })), 'grep')
 })
+
+test('C13 a round handed to a device draws in the chat with that device too', () => {
+  // the round runs on the device's own main conversation, so its frames resolve to the main chat;
+  // the chat with that device is where the person watching it is looking
+  const streams = [
+    stream({ session: 'main', from: 'nas', round: 'r1', text: 'working on it' }),
+    stream({ session: 'main', from: 'phone', round: 'r2', text: 'someone else' }),
+  ]
+  const shown = streamBubbles(streams, 'nas-chat', { now: 100_000, deviceOf: 'nas' })
+  assert.deepEqual(shown.map((s) => s.round), ['r1'], 'only the NAS\u2019s own round, not the phone\u2019s')
+  // with no device named, a plain chat shows only what was filed under it
+  assert.deepEqual(streamBubbles(streams, 'nas-chat', { now: 100_000 }).map((s) => s.round), [])
+  // and the round is still drawn in the conversation the relay named it under
+  assert.deepEqual(streamBubbles(streams, 'main', { now: 100_000 }).map((s) => s.round), ['r1', 'r2'])
+})
+
+test('C13 a device\u2019s round does not leak into another device\u2019s chat', () => {
+  const streams = [stream({ session: 'main', from: 'nas', round: 'r1' })]
+  assert.deepEqual(streamBubbles(streams, 'phone-chat', { now: 100_000, deviceOf: 'phone' }), [])
+})
+
+test('C13 this computer\u2019s own round is left out of the chat with it too', () => {
+  const streams = [stream({ session: 'main', from: 'me', round: 'r1' })]
+  assert.deepEqual(streamBubbles(streams, 'me-chat', { now: 100_000, deviceOf: 'me', selfId: 'me' }), [])
+})

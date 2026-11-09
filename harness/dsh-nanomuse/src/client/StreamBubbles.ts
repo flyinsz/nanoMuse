@@ -126,13 +126,22 @@ export function renderStreamBubbles(t: Translate): () => void {
   let ticker: ReturnType<typeof setInterval> | undefined
   let stopped = false
 
-  const sweep = () => {
-    scheduled = undefined
-    const streams = live.streams
-    const selfId = live.hub.deviceId
-    for (const content of document.querySelectorAll<HTMLElement>('[data-conversation-content][data-conversation-session]')) {
-      const sessionId = content.getAttribute('data-conversation-session') ?? ''
-      const shown = streamBubbles(streams, sessionId, { selfId })
+    const sweep = () => {
+      scheduled = undefined
+      const streams = live.streams
+      const selfId = live.hub.deviceId
+      // The device a chat belongs to, if it is one (C13): a round handed to a device runs on that
+      // device's own conversation, and its frames resolve to the main chat — the chat with that
+      // device is where the person watches it, so its rounds draw there too.
+      const deviceOfChat = (sessionId: string): string => {
+        for (const [deviceId, chat] of Object.entries(live.hub.deviceChats ?? {})) {
+          if (chat === sessionId) return deviceId
+        }
+        return ''
+      }
+      for (const content of document.querySelectorAll<HTMLElement>('[data-conversation-content][data-conversation-session]')) {
+        const sessionId = content.getAttribute('data-conversation-session') ?? ''
+        const shown = streamBubbles(streams, sessionId, { selfId, deviceOf: deviceOfChat(sessionId) })
       // The bubbles of this chat, by key, so one that is gone is removed and the rest reused.
       const nodes = new Map<string, HTMLElement>()
       for (const node of content.querySelectorAll<HTMLElement>('.nm-stream')) {

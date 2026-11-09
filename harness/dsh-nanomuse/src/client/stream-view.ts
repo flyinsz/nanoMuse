@@ -50,15 +50,20 @@ export function hasSomethingToDraw(stream: LiveStream): boolean {
 export function streamBubbles(
   streams: readonly LiveStream[] | undefined,
   session: string,
-  options: { selfId?: string; now?: number; graceMs?: number; quietMs?: number } = {},
+  options: { selfId?: string; now?: number; graceMs?: number; quietMs?: number; deviceOf?: string } = {},
 ): LiveStream[] {
   if (!streams || !session) return []
   const now = options.now ?? Date.now()
   const grace = options.graceMs ?? STREAM_GRACE_MS
   const quiet = options.quietMs ?? STREAM_QUIET_MS
   const self = options.selfId ?? ''
+  // A round handed to a device runs on *that* device's own main conversation (C13 §3), so its
+  // frames are resolved to the main chat — and [deviceOf] names the device whose chat this is.
+  // Its rounds belong here as well, so the chat with that Muse shows it working rather than
+  // standing empty while it is the one answering.
+  const device = options.deviceOf ?? ''
   return streams
-    .filter((s) => s.session === session && s.round !== '' && s.from !== self)
+    .filter((s) => (s.session === session || (device !== '' && s.from === device)) && s.round !== '' && s.from !== self)
     .filter(hasSomethingToDraw)
     .filter((s) => now - s.at < (s.done ? grace : quiet))
     .sort((a, b) => a.at - b.at || a.round.localeCompare(b.round))
