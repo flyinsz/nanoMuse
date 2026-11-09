@@ -560,7 +560,10 @@ class MinisApp : Application(), ImageLoaderFactory {
         // nanoMuse: nanomuse-backup — a backup with the page's saved choices, so a scheduled task can run one (#560).
         NativeOffloadServer.register("nanomuse-backup", io.github.nanomuse.backup.BackupOffloadHandler(this))
         // nanoMuse: join the hub, so the user's other devices can reach this phone and it can reach them.
-        io.github.nanomuse.hub.Hub.autoStart(this)
+        // Retried until the account can be read: this runs before anything the person has done in this
+        // process, and an account not yet loaded used to mean the phone stayed off the hub for the life
+        // of the process (see Hub.autoStartWhenReady).
+        io.github.nanomuse.hub.Hub.autoStartWhenReady(this)
         // T-config: minis-config — agent-facing settings management
         // (read/write registered ConfigFields with audit + revert).
         // Mirrors iOS `config_offload_register()` in ISHKernel.m.

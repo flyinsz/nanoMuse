@@ -88,6 +88,40 @@ object Hub {
         start(context)
     }
 
+    /**
+     * Joins the hub when the account can be read yet, waiting for it if it cannot.
+     *
+     * [autoStart] runs from `Application.onCreate`, which is before anything the person has
+     * done in this process — and the account it reads (the instance id in prefs, the key in the
+     * provider repository) is loaded by that same startup. Run too early it finds nothing, and
+     * it used to give up for the life of the process: the phone stayed off the hub until the
+     * app was killed and opened again, which is what a strip with no faces on it and a chat
+     * that never reaches a device both look like. Retried instead, a few times and with a wait
+     * between, so a slow first read costs a second and not the session.
+     *
+     * A process that is already joined returns at once (`start` keeps one client), so calling
+     * this where [autoStart] is called is safe whether or not the read was ready.
+     */
+    fun autoStartWhenReady(context: Context) {
+        val app = context.applicationContext
+        Thread {
+            // 250 ms, 500, 1 s, 2 s, 4 s: the account is read either immediately or well inside
+            // this, and a person who is not signed in at all pays one thread that ends.
+            var wait = 250L
+            repeat(6) {
+                if (client != null) return@Thread
+                autoStart(app)
+                if (client != null) return@Thread
+                try {
+                    Thread.sleep(wait)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+                wait = (wait * 2).coerceAtMost(4_000L)
+            }
+        }.apply { isDaemon = true; name = "hub-autostart" }.start()
+    }
+
     @Synchronized
     fun start(context: Context) {
         if (client != null) return
