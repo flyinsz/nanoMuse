@@ -101,11 +101,12 @@ object Hub {
             key = key,
             hello = { hello(app) },
             onCall = { call -> HubActions.handle(app, call) },
-            // nanoMuse: the relay's `devices` frame does not carry `this` — that field is put on
-            // the list by the *runtime* when this phone asks it over HTTP (nanomuse/hub/service.py,
-            // `d["this"] = d.get("id") == self.device_id`), so a phone reading the raw frame saw
-            // every entry as somebody else's and drew no face of its own in the strip. This end
-            // knows its own id, so it marks the entry here, once, for every reader.
+            // nanoMuse: the entry that is *this* phone is marked here, from the id this end joined
+            // with, rather than taken from the frame. The relay now marks it too (`this` is built
+            // per reader, nanomuse_cloud/hub.py `devices(account_id, self_id)`), and the two agree
+            // by construction — both compare against the id this phone announced in `hello`. Doing
+            // it here as well is what keeps a relay that predates that field from drawing a strip
+            // with no face of one's own, and it costs one comparison per frame.
             onDevices = { list -> _devices.value = markThis(app, list) },
             onState = { on, detail -> _connected.value = on; _detail.value = detail },
             onProfile = { frame -> io.github.nanomuse.cloud.ProfileSync.onFrame(app, frame) },

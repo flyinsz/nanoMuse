@@ -78,6 +78,8 @@ import com.openminis.app.offload.OffloadPermissionManager
 import com.openminis.app.service.SessionActivityTracker
 import com.openminis.app.service.SessionConcurrencyManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -3504,10 +3506,15 @@ class ChatViewModel(
         // (io.github.nanomuse.terminal.DeviceInbox). Only once nothing is left unread does the
         // face mean the main chat again, which is its usual meaning.
         if (device.isThis) {
-            // The face of the phone is drawn large by the strip itself once this chat is the one
-            // shown (nmDeviceFaces resolves a blank aim to this phone), so nothing is cleared
-            // here: the aim belongs to the chat being left, and clearing it would bring the
-            // device chat back un-aimed the next time it is opened.
+            // nanoMuse: the aim of the chat being landed in goes — see below.
+            // The chat this tap lands in is this phone's own, so its aim goes: a chat that still
+            // named the device it was last sent to would say "run on <device>" over a phone
+            // conversation the moment it is shown (DeviceExecutor reads the aim, nmDeviceFaces
+            // draws this phone because its own id is never in the list). That stale aim is what
+            // a person who typed `@<device>` in the main chat carries home with them — the
+            // mention path makes the aim sticky, and until now the only thing that cleared it
+            // was another `@本机` in the same chat. The tap on this phone *is* that intent.
+            nmAimAt(null)
             viewModelScope.launch {
                 val inbox = io.github.nanomuse.terminal.DeviceInbox.newestUnread(
                     candidates = nmIncomingChats(),
@@ -6653,9 +6660,22 @@ class ChatViewModel(
             // queue of finished lines — the answer is read while it is being made. The id is
             // the bubble's own and never reaches the database: the turn's own text is what is
             // kept (see below), and this one only holds the screen while that is on its way.
+            // The pieces come off the hub's own thread while the bubble is drawn on the main one,
+            // so they are *queued* like the steps rather than posted from inside the callback.
+            // Posting was a race: a piece handed to the main thread after the poll loop below had
+            // already run and dropped the bubble opened a *second* one, which then stood beside
+            // the finished answer — the same words twice. One queue drained in order by the one
+            // thread that draws is what makes "the live bubble, then the real one" hold.
+            val livePieces = java.util.concurrent.LinkedBlockingQueue<String>()
             val live = StringBuilder()
             var liveId: String? = null
-            val outcome = withContext(Dispatchers.IO) {
+            // nanoMuse: the run and the drawing happen at once — see below.
+            // The run and the drawing happen at once: the send blocks on the hub's own thread
+            // until the turn is over, so the pieces it queues are drained *here*, on the thread
+            // that draws, while it is still running. Awaiting the send first and reading the queue
+            // afterwards would draw the whole answer in one go at the end — no streaming — and it
+            // is also what let a late piece open a second bubble beside the finished answer.
+            val run = viewModelScope.async(Dispatchers.IO) {
                 io.github.nanomuse.terminal.RemoteTaskController.send(
                     context = context,
                     device = device,
@@ -6679,14 +6699,7 @@ class ChatViewModel(
                         // bubble and a queue of finished lines are two different readings of the
                         // same turn, and drawing both would say everything twice.
                         if (step is io.github.nanomuse.terminal.RemoteTaskController.Step.Partial) {
-                            val piece = step.text
-                            viewModelScope.launch(Dispatchers.Main.immediate) {
-                                live.append(piece)
-                                val shown = live.toString()
-                                val id = liveId ?: nmAppendLiveAssistantLine(targetSid, shown)
-                                    .also { liveId = it }
-                                if (liveId == id) nmUpdateLiveAssistantLine(targetSid, id, shown)
-                            }
+                            livePieces.add(step.text)
                         } else {
                             val line = when (step) {
                                 is io.github.nanomuse.terminal.RemoteTaskController.Step.Running -> step.text
@@ -6701,13 +6714,33 @@ class ChatViewModel(
                     },
                 )
             }
+            // Drain both queues while the round runs, on the thread that draws. The steps are
+            // drawn as they are finished; the answer's pieces grow one bubble in place. Polled
+            // here rather than posted from inside the callback, so the order the person sees is
+            // the order they arrived and nothing is drawn after the turn's own text below.
+            while (run.isActive || livePieces.isNotEmpty() || steps.isNotEmpty()) {
+                var drew = false
+                if (livePieces.isNotEmpty()) {
+                    val piece = livePieces.poll() ?: ""
+                    if (piece.isNotEmpty()) {
+                        live.append(piece)
+                        val shown = live.toString()
+                        val id = liveId ?: nmAppendLiveAssistantLine(targetSid, shown).also { liveId = it }
+                        if (liveId == id) nmUpdateLiveAssistantLine(targetSid, id, shown)
+                        drew = true
+                    }
+                }
+                val line = steps.poll()
+                if (line != null) {
+                    nmAppendAssistantLine(targetSid, line)
+                    drew = true
+                }
+                if (!drew) delay(16)
+            }
+            val outcome = run.await()
             // The turn is over and its own text is about to be written below: the bubble that grew
             // while it was being made goes first, or the same answer would stand twice.
             nmDropLiveAssistantLine(liveId)
-            while (true) {
-                val line = steps.poll() ?: break
-                nmAppendAssistantLine(targetSid, line)
-            }
             val said = when (outcome) {
                 is io.github.nanomuse.terminal.RemoteTaskController.Outcome.Answered -> outcome.text
                 is io.github.nanomuse.terminal.RemoteTaskController.Outcome.Failed ->
