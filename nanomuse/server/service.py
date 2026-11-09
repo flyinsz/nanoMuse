@@ -1171,6 +1171,7 @@ class MuseService:
         language: str = "",
         via: str = "",
         delivery: str = "",
+        mid: str = "",
     ) -> dict[str, Any]:
         """Queue a message for a thread. Returns the timeline event that was created.
 
@@ -1203,6 +1204,13 @@ class MuseService:
             return event
         if source in ("user", "device"):
             event_data: dict[str, Any] = {"type": "user", "text": text, "thread": thread_id}
+            # C13 (impl §3, "单次推送"): a round another device handed over arrives with the
+            # `mid` the asking device already minted for this sentence. Every device reads the
+            # same `mid` as the same row, so carrying it here is what keeps the question from
+            # landing twice — once from the asker's own push and once from this runtime's —
+            # in everyone's chat, and twice in the asking model's own context.
+            if mid:
+                event_data["mid"] = mid
             if attachments:
                 event_data["files"] = [a.model_dump() for a in attachments]
             if once is not None:

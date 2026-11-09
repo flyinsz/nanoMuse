@@ -964,6 +964,12 @@ class HubService:
                 source="device",
                 label=call.sender_name,
                 language=str(call.args.get("language") or "")[:20],
+                # C13 (impl §3, "单次推送（单 mid）"): the asking device sends the `mid` it already
+                # gave this sentence's own row, so the round here is written under that same id
+                # rather than a fresh one. Without it the same words land twice on every device —
+                # once from the asker's push and once from ours — and twice in the asking model's
+                # own context, which is the duplication the contract names.
+                mid=str(call.args.get("mid") or "")[:64],
             )
             self._incoming[call.id] = _IncomingTask(thread.id, thread.worker)
             final = await asyncio.wait_for(
