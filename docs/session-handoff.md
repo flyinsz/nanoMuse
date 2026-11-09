@@ -119,7 +119,7 @@ owner 跑这一轮时，逐字文本、推理增量、工具调用与结果都�
   的 `data_export_sources`），代跑用的是 owner 的记忆，不迁移。
 - 非发起设备接收审批卡：现有链路只把卡给 call 的发起端；旁观端收不到。审批卡的回传
   在后续阶段单独做。
-- Android / iOS：本契约先落 Mac + Web，手机端随后跟进（新帧对旧端是静默忽略，不会坏）。
+- iOS：本契约先落 Mac + Web + Android，iPhone 随后跟进（新帧对旧端是静默忽略，不会坏）。
 
 ## 七、落地顺序
 
@@ -163,14 +163,14 @@ cid** 下。而每台设备本地都有一条「和这台设备的会话」（`D
 ## 九、边界问题清单（阶段一必须先解决）
 
 以下每一条在现有代码里都有确切位置，任一未解决都会产生「消息丢失 / 重复 / 上下文
-污染 / 用户困惑」：
+污染 / 用户困惑」。「状态」列记的是本契约的落地进度：
 
-| # | 问题 | 位置 |
-|---|---|---|
-| 1 | 跨设备代跑丢附件 | `nanomuse/hub/service.py` 的 task args 只有 text；`sync/engine.py` 的 wire 只带 `{name,mime,size}`，对端写死 `path:""` |
-| 2 | 同一消息双 mid 双气泡 | 发起端 `message_sent` 与 owner `svc.send` 各推一次；中继只按 `mid` 去重 |
-| 3 | 「谁问的」污染既有会话 | DSH `task.ts` 的 `frame()`、Android `HubTasks.kt` 的 prefix、iOS 同构；Python runtime 用 `purposes`（正确做法） |
-| 4 | 无跨端锁，消息被折进当前轮 | `hub/service.py` 只在 `remote_from` 线程查 busy；`agent/core.py` 的 `_drain_inbox` 折叠 |
-| 5 | 代跑标记若复用会停同步 | `sync/engine.py` 的 `_eligible()` 排除 `remote_from`；DSH `sync.ts` 的 `syncs()` 同源 |
-| 6 | owner 离线无兜底 | `hub.py` 的 `_call` 返回 `device_offline`；`forget` 直接 `DELETE FROM devices` |
-| 7 | 引用一律用 device_id | `rename` 只改 name 不改 id |
+| # | 问题 | 位置 | 状态 |
+|---|---|---|---|
+| 1 | 跨设备代跑丢附件 | `nanomuse/hub/service.py` 的 task args 只有 text；`sync/engine.py` 的 wire 只带 `{name,mime,size}`，对端写死 `path:""` | 阶段一直接拒绝并说明 |
+| 2 | 同一消息双 mid 双气泡 | 发起端 `message_sent` 与 owner `svc.send` 各推一次；中继只按 `mid` 去重 | ✅ 运行时 + Mac + Android 已直通单 `mid` |
+| 3 | 「谁问的」污染既有会话 | DSH `task.ts` 的 `frame()`、Android `HubTasks.kt` 的 prefix、iOS 同构；Python runtime 用 `purposes`（正确做法） | ✅ 走侧信道 |
+| 4 | 无跨端锁，消息被折进当前轮 | `hub/service.py` 只在 `remote_from` 线程查 busy；`agent/core.py` 的 `_drain_inbox` 折叠 | ✅ `_task` 见 busy / `thread.device` 即 `fail("busy")` |
+| 5 | 代跑标记若复用会停同步 | `sync/engine.py` 的 `_eligible()` 排除 `remote_from`；DSH `sync.ts` 的 `syncs()` 同源 | ✅ 用独立的 `handoff_from`，`_eligible()` 不排除 |
+| 6 | owner 离线无兜底 | `hub.py` 的 `_call` 返回 `device_offline`；`forget` 直接 `DELETE FROM devices` | ✅ 中继回 `device_offline`，发起端在发之前就按 `online` 拒（Mac `coding.ts`、Android `RemoteTaskController`）|
+| 7 | 引用一律用 device_id | `rename` 只改 name 不改 id | ✅ |
