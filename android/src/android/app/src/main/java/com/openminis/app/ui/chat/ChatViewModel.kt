@@ -3447,9 +3447,20 @@ class ChatViewModel(
         // aim is kept under whichever id this chat answers to now and moved on promotion
         // (nmMoveAim).
         val sid = realSessionId.ifEmpty { sessionId }
-        if (sid.isBlank()) return
-        _nmAimedDevice.value =
-            io.github.nanomuse.terminal.DeviceAim.set(context, sid, hubId) ?: ""
+        nmAimAt(sid, hubId)
+    }
+
+    /**
+     * Aim [sessionId] at [hubId] (null clears it), for the callers that act on a *named* chat
+     * rather than on the open one — the device strip's tap on this phone clears the main chat's
+     * aim even while another chat is open, because the main chat is the one this tap is about.
+     * [_nmAimedDevice] only moves when the named chat is the open one; the aim of a chat nobody
+     * is looking at is read back by `nmLoadAim` the next time it is opened.
+     */
+    private fun nmAimAt(sessionId: String?, hubId: String?) {
+        if (sessionId.isNullOrBlank()) return
+        val stored = io.github.nanomuse.terminal.DeviceAim.set(context, sessionId, hubId) ?: ""
+        if (sessionId == realSessionId.ifEmpty { this.sessionId }) _nmAimedDevice.value = stored
     }
 
     /** The aim as stored, read when a chat is opened so the strip draws the right avatar large. */
@@ -3506,16 +3517,27 @@ class ChatViewModel(
         // (io.github.nanomuse.terminal.DeviceInbox). Only once nothing is left unread does the
         // face mean the main chat again, which is its usual meaning.
         if (device.isThis) {
-            // nanoMuse: the aim of the chat being landed in goes — see below.
-            // The chat this tap lands in is this phone's own, so its aim goes: a chat that still
-            // named the device it was last sent to would say "run on <device>" over a phone
-            // conversation the moment it is shown (DeviceExecutor reads the aim, nmDeviceFaces
-            // draws this phone because its own id is never in the list). That stale aim is what
-            // a person who typed `@<device>` in the main chat carries home with them — the
-            // mention path makes the aim sticky, and until now the only thing that cleared it
-            // was another `@本机` in the same chat. The tap on this phone *is* that intent.
-            nmAimAt(null)
+            // The aim that has to go is the *main* chat's, not whichever chat this tap was made
+            // from. `@<device>` in the main chat makes that chat's aim sticky on purpose (the
+            // owner stays with the mention), and it was the only thing nothing ever cleared: a
+            // person who had typed `@飞牛深圳` there once saw every later visit announced as
+            // "run by 飞牛深圳" with no way back. Clearing it here is what makes this tap mean
+            // "my own chat runs here".
+            //
+            // Cleared on the main chat rather than on the open one because the two are different
+            // chats: a tap made while a device's chat is open lands back in the main chat, and
+            // clearing the *device's* aim would silently unfix that device — its chat would come
+            // back saying "run by this phone" while its own name is on the header, and picking it
+            // again would not put it back (the face only shows a chat that exists; the aim is what
+            // says whose turn it is). One chat's aim, the one this tap is about.
             viewModelScope.launch {
+                // `persisted`, not `resolve`: the latter publishes an id and can create a draft,
+                // and clearing an aim is no reason to pick a chat. `sessionId` catches the case
+                // where the main chat is still a draft (nothing persisted yet); both are null
+                // before the shell has resolved one, and then there is nothing to clear anyway.
+                val main = io.github.nanomuse.home.MainChat.persisted(context)
+                    ?: io.github.nanomuse.home.MainChat.sessionId.value
+                main?.let { nmAimAt(it, null) }
                 val inbox = io.github.nanomuse.terminal.DeviceInbox.newestUnread(
                     candidates = nmIncomingChats(),
                     seenAt = { id -> io.github.nanomuse.terminal.DeviceNews.seenAt(context, id) },
@@ -3536,24 +3558,23 @@ class ChatViewModel(
         }
         viewModelScope.launch {
             val repo = chatRepository
-            io.github.nanomuse.terminal.DeviceChat.existing(context, repo, device)?.let { existing ->
-                io.github.nanomuse.ui.home.HomeBus.showSession(existing)
-                return@launch
-            }
             val seeded = currentModel?.id
                 ?: providerRepository.config.value.modelGroups
                     .firstOrNull()?.let { g -> providerRepository.availableMemberEntries(g).firstOrNull()?.model?.id }
                 ?: providerRepository.allVisibleEntries().firstOrNull()?.baseModel?.id
-                ?: return@launch
-            val made = runCatching {
-                repo.createSession(
-                    modelId = seeded,
-                    title = context.getString(R.string.nm_device_chat_title, device.name),
-                    memoryEnabled = _memoryEnabled.value,
-                )
-            }.getOrNull() ?: return@launch
-            io.github.nanomuse.terminal.DeviceChat.remember(context, device, made.id)
-            io.github.nanomuse.ui.home.HomeBus.showSession(made.id)
+            // `ensure` rather than `existing`: it reuses the chat when there is one *and* writes
+            // the aim, which is the invariant that says a chat of a device is aimed at it. Opening
+            // one without that leaves the header showing the device while the line over the strip
+            // says the next sentence runs here — and picking the device again would not repair it,
+            // which is exactly the state a chat whose aim was cleared from elsewhere came back in.
+            val id = io.github.nanomuse.terminal.DeviceChat.ensure(
+                context = context,
+                repo = repo,
+                device = device,
+                seedModel = seeded,
+                memoryEnabled = _memoryEnabled.value,
+            ) ?: return@launch
+            io.github.nanomuse.ui.home.HomeBus.showSession(id)
         }
     }
 
