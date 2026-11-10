@@ -5468,7 +5468,16 @@ fun ChatScreen(
                                                 )
                                                 Text(
                                                     text = when {
-                                                        entry.nmSelf -> stringResource(R.string.nm_executor_here_row)
+                                                        // nanoMuse: the row above already reads
+                                                        // `本机`; naming the same word twice said
+                                                        // nothing. The sub-line carries what the
+                                                        // other device rows carry about themselves —
+                                                        // which phone this actually is.
+                                                        entry.nmSelf -> listOf(
+                                                            io.github.nanomuse.hub.Hub.name(context),
+                                                            stringResource(R.string.nm_profile_online),
+                                                            io.github.nanomuse.hub.Hub.deviceId(context),
+                                                        ).filter(String::isNotBlank).joinToString(" · ")
                                                         entry.nmDevice != null -> listOf(entry.nmDevice!!.os, stringResource(R.string.nm_profile_online), entry.nmDevice!!.id).filter(String::isNotBlank).joinToString(" · ")
                                                         else -> entry.displayPath
                                                     }, // nanoMuse
@@ -5480,8 +5489,11 @@ fun ChatScreen(
                                             }
                                             Spacer(modifier = Modifier.width(6.dp))
                                             // Scope / mount badge — matches iOS capsule.
+                                            // nanoMuse: this phone's own row carries the same
+                                            // badge as the other devices; reading it as a mount
+                                            // (the fallback below) put "mount" next to `@本机`.
                                             Text(
-                                                text = if (entry.nmDevice != null) stringResource(R.string.nm_devices_title) else entry.mountName ?: entry.scope.displayLabel, // nanoMuse
+                                                text = if (entry.nmSelf || entry.nmDevice != null) stringResource(R.string.nm_devices_title) else entry.mountName ?: entry.scope.displayLabel, // nanoMuse
                                                 fontSize = 10.sp,
                                                 fontWeight = FontWeight.Medium,
                                                 color = ChatColors.secondaryText,

@@ -700,6 +700,16 @@ object ConversationSync {
         // the reply arrived: whoever was working on that chat is done (C9)
         if (r.replied.isNotEmpty()) _working.update { map -> map - r.replied }
         if (r.touchedSessions.isNotEmpty()) _pulled.tryEmit(r.touchedSessions)
+        // nanoMuse: the owner travels in the conversation row, so a pull that touched chats may
+        // have moved one (executor handoff v2 §4.1) — another device ran a line, or took the
+        // context back with `@本机`. Re-read the map here, or every reader keeps the owner it
+        // saw at init: the composer's placeholder names the old device, and `RemoteChatBridge`
+        // sends the next line here because `ownerId()` resolves the stale entry to null. Cheap
+        // (one query per pull that changed a chat) and best effort.
+        val ctx = app
+        if (r.touchedSessions.isNotEmpty() && ctx != null && active(ctx)) {
+            scope.launch { runCatching { refreshOwnersNow() } }
+        }
     }
 
 }

@@ -44,6 +44,11 @@ class RemoteChatBridge(
         // ordinary path, which runs here. Only the id crosses this boundary: the bridge resolves
         // it against the device list it was handed, so an offline owner falls back to this phone.
         fun ownerId(): String? = null
+        // nanoMuse: re-read the owner map from the database before routing a line (§4.2). The
+        // in-memory map is filled at init and after a pull that touched chats; without this a
+        // send can route on an owner another device already moved. Suspend, so the route below
+        // judges the value the database holds rather than a stale one.
+        suspend fun refreshOwner() {}
         // nanoMuse: what that owner is called, for the "it is not answering" message (§4.2).
         fun ownerName(): String? = null
         // nanoMuse: a line that names this phone (`@本机`, or this device's own name) takes the
@@ -70,7 +75,13 @@ class RemoteChatBridge(
     }
 
     /** True means addressed here, including a refusal. It must not fall into the local model. */
-    fun send(text: String, devices: List<Device>, attachments: Boolean, compacting: Boolean): Boolean {
+    suspend fun send(text: String, devices: List<Device>, attachments: Boolean, compacting: Boolean): Boolean {
+        // nanoMuse: the owner may have moved on another device since this screen opened, and the
+        // in-memory map only catches up on the pull cycle — so a follow-up meant for the NAS was
+        // judged ownerless and ran here (executor handoff v2 §4.2). Ask the database before
+        // routing: one indexed query, awaited, so the route below judges the current owner.
+        // Best effort; a failure leaves the map as it was.
+        host.refreshOwner()
         var route = RemoteDeviceRoute.resolve(text, devices)
         // nanoMuse: with no `@` at all, the recent owner runs it (executor handoff v2 §4.2) — the
         // one behaviour change from upstream, where no mention always meant this phone. Only a

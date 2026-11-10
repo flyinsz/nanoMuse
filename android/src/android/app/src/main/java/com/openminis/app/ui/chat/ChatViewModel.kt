@@ -6342,12 +6342,21 @@ class ChatViewModel(
     fun nmTakeCountableTurn(): Boolean = nmCountableTurn.also { nmCountableTurn = false }
 
     fun sendMessage(text: String) {
-        // nanoMuse: explicit device work is routed before any local model or avatar action.
-        if (nmRemoteBridge.send(text, io.github.nanomuse.hub.Hub.others(context),
-                _attachments.value.isNotEmpty() || _pastedTexts.value.isNotEmpty(), _isCompacting.value)) return
-        if (_isStreaming.value) { enqueuePrompt(text); return }
-        if (nmInterceptAvatar(text)) { nmCountableTurn = false; return }
-        sendMessage(text, skipContextCheck = false)
+        // nanoMuse: explicit device work is routed before any local model or avatar action. The
+        // route is judged against a freshly read owner map, so it runs in a coroutine and the
+        // local fall through happens only once that read is in (executor handoff v2 §4.2).
+        viewModelScope.launch {
+            val toDevice = nmRemoteBridge.send(
+                text,
+                io.github.nanomuse.hub.Hub.others(context),
+                _attachments.value.isNotEmpty() || _pastedTexts.value.isNotEmpty(),
+                _isCompacting.value,
+            )
+            if (toDevice) return@launch
+            if (_isStreaming.value) { enqueuePrompt(text); return@launch }
+            if (nmInterceptAvatar(text)) { nmCountableTurn = false; return@launch }
+            sendMessage(text, skipContextCheck = false)
+        }
     }
 
     // nanoMuse: only the adapter touches upstream state; the lifecycle lives in RemoteChatBridge.
@@ -6392,6 +6401,12 @@ class ChatViewModel(
                 }
             }
             override fun afterTurn() { nmSendNextQueued() }
+            // nanoMuse: the owner map is filled at init and after a pull; a send asks for a
+            // fresh read first, because the owner may have moved on another device since then
+            // (executor handoff v2 §4.2). Best effort — a failure keeps the map as it was.
+            override suspend fun refreshOwner() {
+                io.github.nanomuse.sync.ConversationSync.refreshOwnersNow()
+            }
             // nanoMuse: a line with no `@` goes to the chat's owner when it is not this phone
             // (executor handoff v2 §4.2). This phone's own id reads as no owner — the ordinary path.
             override fun ownerId(): String? {
