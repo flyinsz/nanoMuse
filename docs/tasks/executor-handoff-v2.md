@@ -390,20 +390,48 @@ P4 **必须**等确认点（实机联调）过后才启动。
 | 缺口 | 说明 |
 |---|---|
 | **Android 推 stream 发送端** | Android 只有接收（`StreamBatch`），`SyncApi` 无 `stream()`。**用户决定不做**，后续有需要再完善。手机作为属主跑 turn 时其他端看不到流式 |
-| **附件跨设备转发** | 见 11.4 —— **用户选方案 B（真转发）**，实施约束见下 |
+| **`@设备`（handoff）路径的附件转发** | 见 11.4 —— 用户选方案 C：附件只走**设备会话**。`@设备` + 附件改为发提示，不再静默 |
 | 「只推本机正在跑」精确判据 | §4.4 字面要求。实测 `Thread.busy` 在末尾帧出队时已 False，按它门控会**丢 `stream_end` → 远端气泡闭不上**。当前用 `active + _eligible` 近似；要精确需在发布侧打标 |
 
-### 11.4 附件跨设备转发（方案 B）的实施约束
+### 11.4 附件跨设备转发（已实施）
 
-用户选 **B：真把附件传给远端设备**。摸清的现状与硬约束：
+**决策经过**：先选 B2（全类型转发）→ 摸清约束后用户改选 **C**（只做设备会话，不做 handoff 转发）。
 
-- **中继已有 blob 通道**：`PUT/HEAD/GET /v1/blobs/{sha256}`（内容寻址，上限 `BLOB_MAX_BYTES=32MB`，需账号持有引用）。
-- ⚠️ **但它只收 `image/*` `audio/*` `video/*`**（`service.py: BLOB_MIMES`）→ **pdf / docx / txt / csv 等文档类附件传不了**。要支持必须扩 `BLOB_MIMES`（中继侧改动，影响面需评估）。
-- ⚠️ **中继 hub frame 上限 16MB**（`hub.py: frame_limit`），而本机上传上限 25MB → **附件不能塞进 hub 消息**，必须走 blob 通道 + 消息里只带引用。
-- ⚠️ **运行时只有 `has_blob()`/`put_blob()`，没有下载端** → 远端设备**目前取不回文件**，需新增 `get_blob()`。
-- ⚠️ **Android 侧 `HubActions.task()` 硬编码 `attachments = emptyList()`** → 接收端要用起来。
+**为什么是 C**：`→ <设备名>` 那个会话本来就是「把这句话交给那台设备」，附件补在它上面最自然，
+且它复用既有的 `_run_remote`，不必新开分支。`@设备` 的 handoff 转发属重复建设。
 
-**结论**：B 不是小改，是一条新通道（运行时上传+下载、中继 blob 引用授权、Android 接收落地文件）。**待用户确认后再开工。**
+#### 已落地的通用管道（路由无关，两条路都能复用）
+
+| 层 | 内容 | 提交 |
+|---|---|---|
+| 中继 | `BLOB_MIMES` 扩到 `image/ audio/ video/ application/ text/`（文档类可传）；配额链未绕过 | `25e6562b9` |
+| 运行时 | `cloud.py` 新增 `get_blob()`（404 明确抛错）；新建 `sync/files.py`（`safe_name`/`free_path`/`file_ref`/`upload`/`download`）| `25e6562b9` |
+| Android 接收 | `HubAttachments` + `HubAttachmentFetcher`；`HubActions.task()` 接 `args.attachments` | `25e6562b9` |
+
+#### 方案 C 的接线（本次）
+
+| 位置 | 改动 |
+|---|---|
+| `server/service.py` `if thread.device:` | `emit` 带 `files`；`run_remote(thread, text, [paths])` |
+| `hub/service.py` `run_remote`/`_run_remote` | 加 `files` 参数 |
+| `hub/service.py` task args | `attachments: [{sha256,name,mime,size}]` —— 先 `upload` 再发帧，**只带引用** |
+| `server/service.py` HANDOFF 分支 | `@设备` + 附件 → 发 notice（不再静默在本机跑） |
+
+**三条硬约束（实施时踩到/避开的）**：
+1. **帧里只能放引用** —— hub frame 上限 16 MiB，而单文件上限 32 MiB。
+2. **`asyncio.to_thread`** —— `upload` 为算 sha 要读整个文件，跑在事件循环里会卡住整个 runtime。
+3. **惰性 import** `nanomuse.sync.files` —— `sync` 包拉 `engine` → `server.service` → 本模块，直接 import 会成环（与既有 coding tools 的绕法一致）。
+
+**契约（best-effort，非永久）**：
+- blob 引用可能被回收：超 `MEDIA_MAX_GB`（默认 50 GiB）时按 LRU 淘汰。
+- **下载不续命**：`last_used_at` 只在写入引用时推进 → 接收端兜 404 是**必需分支**。
+- 单个附件上传失败只跳过它，**不丢整句话**。
+- `RECORD_TURNS=0` 的 relay 完全不支持 blob → 通道不可用，需明确降级。
+
+**仍未做**：
+- `@设备`（handoff）路径的附件转发 —— 用户决定不做。
+- **Android 推 stream 发送端** —— 用户决定不做，后续有需要再完善。
+
 
 ### 11.5 过程中的事故（记录在案）
 
