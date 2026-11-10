@@ -353,3 +353,61 @@ P4 **必须**等确认点（实机联调）过后才启动。
 6. 默认执行人 = **最近属主**，非本机。
 7. `@<设备>` 与 `@本机` 都可用，`@` 优先于默认且黏住。
 8. 属主用 `device_id` 持久化，不用内存 presence。
+
+## 十一、审计结论与修复（2026-11-10 晚）
+
+> 对照本文审了一遍实现。**baseline `03a24dd88`（审计时的工作区快照）**，
+> 修复落在 `417ea4221` + `fceb2393a`。下面区分「本文承诺 vs 实际」与「本文自身不实之处」。
+
+### 11.1 本文自身不实的地方（先更正）
+
+| 位置 | 本文原称 | 实际 |
+|---|---|---|
+| §六 P1 验收 | 「✅ **1453 passed**」 | 审计时 `tests/test_sync.py::test_a_mention_hands_the_turn_to_the_device` **是红的**（`TypeError: got an unexpected keyword argument 'mid'`）—— 生产代码加了 `mid=` 而测试桩没改。**该验收结论当时不成立** |
+| §六 表格 #1/#2 | 「三端同一张表」 | Python/Android 是 2 个词，**Web 是 3 个**（多一个 `This machine`），且该常量在 Web **从未被引用** |
+| §4.2 规则 3 | 要求中继 `self_call` 硬拒放行 | **经实测无需改**：`@本机` 走 `RUN_HERE`，根本不发 hub call；所有 `hub.call(to=)` 的 to 都来自排除本机的列表。保留原样（低侵入优先） |
+| §4.1/§九 | 属主「以跑完一轮为准」 | 实现在**发送时刻**标记，且代跑侧（`source=="device"`）**从不标记自己** |
+| §4.3 | 「阶段一不带附件（发不出去并说明）」 | 实际是**静默在本机跑**并把属主改回本机，无任何提示 |
+| §九 风险表 | 「用环境变量开关，默认开，置 0 回退」 | **完全没做**（全仓零命中） |
+
+### 11.2 修掉的真实缺陷
+
+| # | 缺陷 | 根因 | 修法 | 验证 |
+|---|---|---|---|---|
+| 1 | **流式帧无限回环** | `_apply_stream` 把远端帧以 `remote=True` 发到本机 bus，`_watch_status` 无条件喂给 `StreamSender.on_frame`，而它**不看 `remote`** → 本机重推 → 多端指数放大 | `stream.py:on_frame` 开头 `if msg.get("remote"): return` | **变异测试**：禁用该行 → 测试变红；恢复 → 绿（`tests/test_echo_loop.py`）|
+| 2 | 领测红（桩缺 `mid`） | 改生产代码未同步改桩 | 桩补 `mid=""` 并记录 | `test_sync.py` **21 passed** |
+| 3 | **删掉上游能力**（回归） | HANDOFF 分支原有的 `system_note` 注入被整段删除，`self_note` 定义了零调用 | 恢复 `system_note`（只作用于交给远端的那份文本，**不污染气泡**）+ 接线 `self_note`（`@本机` 从别处收回时注入，在 `mark_owner` 之前读 owner） | 恢复上游断言 + 新增「note 不进气泡」断言 |
+| 4 | **owner 两个真相源** | `pull` 只写 `state["device_owners"]`，`meta()` 只读 `Thread.owner_device` → 占位符与实际执行者不一致 | 新增 `_adopt_owner()` **一次写两处** + `_save_index()` 落盘 | `test_owner_routing.py` 新增用例 |
+| 5 | 新 pull 的旁聊不 adopt owner | 首次 pull 时 `thread is None` → `target=""` → 不写 owner | `create_thread` 之后补 `_adopt_owner(created…)` | 同上 |
+| 6 | 代跑侧从不标记自己 | 只有 `source=="user"` 才 `mark_owner`，代跑是 `"device"` | `engine.turn_finished()` 里 `if owner_device(thread) != me: mark_owner(me)` | 幂等用例 |
+| 7 | 属主标记取「中间态」 | 本地分支在**尚未开跑**、且可能被 `answer_question`/头像工作室 early-return 时就把本机标为属主 | 新增 `runs_here` 门控，`mark_owner` 移到所有 early-return 之后 | `test_server.py` 79 passed |
+| 8 | Web 英文 `@本机` 打不出来 | `i18n` 的 `en` 是空字典 → `t("@This machine")` 回落成 `"This machine"`，运行时只认 `this device` | key 改为 `@This device`（与 Android 一致），并收敛 `SELF_WORDS` 为 2 个 + 新增 `isSelfWord` 让常量真正被引用 | web **205 passed**、tsc 0 错 |
+| 9 | 缺环境变量开关 | §九 硬承诺未做 | `config.py` 加 `SyncSettings.owner_routing` + `NANOMUSE_OWNER_ROUTING`；`resolve(enabled=)` 关闭时回上游行为 | 实测：`=0`→`False`、`=1`→`True`；OFF 时无 `@` 走 `here`、`@设备` 仍 handoff |
+| 10 | 死条件 / 硬编码中文 | `(mention.text or True)` 恒真；离线文案中文而上下游全是英文 | 清掉死条件；文案改英文 | ruff 过 |
+
+### 11.3 仍**未做**的（已知缺口，非遗漏）
+
+| 缺口 | 说明 |
+|---|---|
+| **Android 推 stream 发送端** | Android 只有接收（`StreamBatch`），`SyncApi` 无 `stream()`。**用户决定不做**，后续有需要再完善。手机作为属主跑 turn 时其他端看不到流式 |
+| **附件跨设备转发** | 见 11.4 —— **用户选方案 B（真转发）**，实施约束见下 |
+| 「只推本机正在跑」精确判据 | §4.4 字面要求。实测 `Thread.busy` 在末尾帧出队时已 False，按它门控会**丢 `stream_end` → 远端气泡闭不上**。当前用 `active + _eligible` 近似；要精确需在发布侧打标 |
+
+### 11.4 附件跨设备转发（方案 B）的实施约束
+
+用户选 **B：真把附件传给远端设备**。摸清的现状与硬约束：
+
+- **中继已有 blob 通道**：`PUT/HEAD/GET /v1/blobs/{sha256}`（内容寻址，上限 `BLOB_MAX_BYTES=32MB`，需账号持有引用）。
+- ⚠️ **但它只收 `image/*` `audio/*` `video/*`**（`service.py: BLOB_MIMES`）→ **pdf / docx / txt / csv 等文档类附件传不了**。要支持必须扩 `BLOB_MIMES`（中继侧改动，影响面需评估）。
+- ⚠️ **中继 hub frame 上限 16MB**（`hub.py: frame_limit`），而本机上传上限 25MB → **附件不能塞进 hub 消息**，必须走 blob 通道 + 消息里只带引用。
+- ⚠️ **运行时只有 `has_blob()`/`put_blob()`，没有下载端** → 远端设备**目前取不回文件**，需新增 `get_blob()`。
+- ⚠️ **Android 侧 `HubActions.task()` 硬编码 `attachments = emptyList()`** → 接收端要用起来。
+
+**结论**：B 不是小改，是一条新通道（运行时上传+下载、中继 blob 引用授权、Android 接收落地文件）。**待用户确认后再开工。**
+
+### 11.5 过程中的事故（记录在案）
+
+- **有子代理执行 `git stash`，把 4 个并行代理的全部成果一起 stash 走**。经 `git reflog` 定位、`git stash branch` 抢救到 `backup/fixes-20261110`、`--ff-only` 并回主分支，**零丢失**。
+  - ⚠️ **教训**：多代理并行改同一工作区时，派活必须**同时禁止 `commit` 和 `stash`**（本次只禁了 commit）。
+- **验收必须做基线对照**：全量 7 failed（`test_browser`×2 / `test_config`×2 / `test_task_budget`×2 / `test_tools`×1），建独立 worktree 跑基线 → **同样 7 failed，逐条一致** → 判定为预存（沙箱禁 `ps` + vault 占位符），与本次修复无关。
+  - ⚠️ 审计前那轮曾用 `--ignore` 排掉整个文件后宣称「全绿」，**这个做法不可再犯**。
