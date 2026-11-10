@@ -23,7 +23,7 @@ from nanomuse.server import create_app
 from nanomuse.server.events import MAIN_THREAD
 from nanomuse.server.service import MuseService
 from nanomuse.sync import engine as engine_mod
-from nanomuse.sync.mention import parse_mention, system_note
+from nanomuse.sync.mention import parse_mention, self_note, system_note
 
 DEVICES = [
     {"id": "pc-self", "name": "Desk", "kind": "computer", "online": True},
@@ -585,11 +585,13 @@ def test_a_mention_hands_the_turn_to_the_device(synced, monkeypatch: pytest.Monk
     through this device's own agent."""
     client, service, llm, relay = synced
     monkeypatch.setattr(service.hub, "others", lambda: [d for d in DEVICES if d["id"] != "pc-self"])
-    sent: list[tuple[str, str, str]] = []
+    sent: list[tuple[str, str, str, str]] = []
     monkeypatch.setattr(
         service.hub,
         "handoff_to",
-        lambda thread, text, device_id, device_name: sent.append((text, device_id, device_name)),
+        lambda thread, text, device_id, device_name, mid="": sent.append(
+            (text, device_id, device_name, mid)
+        ),
     )
     llm.script.append(LLMResponse(content="Asked the phone.", finish_reason="stop"))
     r = client.post(
@@ -602,18 +604,27 @@ def test_a_mention_hands_the_turn_to_the_device(synced, monkeypatch: pytest.Monk
         and ev["to_device"] == "phone-1"
         and ev["to_device_name"] == "Pixel 8"
     )
-    # handed off: no local model call, and the text arrived without the mention
+    # handed off: no local model call, and the text arrived without the mention — one
+    # `system_note` in front, which is what the far device's model reads (C7 rule 8)
     wait_for(lambda: sent)
-    assert sent[0] == ("what is on the screen?", "phone-1", "Pixel 8")
+    note = system_note("Pixel 8", "phone-1")
+    assert sent[0] == (f"[{note}]\n\nwhat is on the screen?", "phone-1", "Pixel 8", sent[0][3])
+    # the note travels with the line, not into the bubble: the words are as typed
+    assert "[" not in ev["text"] and note not in ev["text"]
     assert not llm.calls
     # the owner moved to the phone
     assert service.sync.owner_device(service.threads[MAIN_THREAD]) == "phone-1"
-    # a mention of this device takes it back: it runs here (no handoff)
+    # a mention of this device takes it back: it runs here (no handoff), with a `self_note`
+    # in front so the model knows the context came from another device
     sent.clear()
     client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "@本机 你好"})
     wait_for(
-        lambda: "你好" in [m.content for m in llm.calls[-1]["messages"] if m.role.value == "user"]
+        lambda: any(
+            m.role.value == "user" and m.content.endswith("你好") for m in llm.calls[-1]["messages"]
+        )
     )
+    user = [m.content for m in llm.calls[-1]["messages"] if m.role.value == "user"][-1]
+    assert user.startswith("[" + self_note("Desk")) and user.endswith("你好")
     assert not sent and service.sync.owner_device(service.threads[MAIN_THREAD]) == "pc-self"
     # no match: the text stays as typed, nothing is addressed
     r = client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "@everyone hello"})

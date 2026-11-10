@@ -633,6 +633,13 @@ class SyncSettings(BaseModel):
     # *Settings → Data controls → Also sync side chats*; the person's switch, once set, is
     # kept in ``sync.json`` and this is only its default.
     side_chats: bool = False
+    # nanoMuse: a plain line (no ``@``) goes to the conversation's *owner* — the device that
+    # last ran a turn of it and so holds the whole context — rather than staying here
+    # (docs/tasks/executor-handoff-v2.md §一/§九). This is a change from upstream's rule
+    # (contract C7, rule 8: the default is always this device), so it has a switch:
+    # ``NANOMUSE_OWNER_ROUTING=0`` puts upstream's rule back, where only ``@<device>``
+    # sends the work elsewhere. On by default — the behaviour the feature asks for.
+    owner_routing: bool = True
 
 
 class HubSettings(BaseModel):
@@ -879,6 +886,16 @@ def _apply_env_overrides(raw: dict[str, Any]) -> None:
         raw.setdefault("cloud", {})["required"] = val.strip().lower() in ("1", "true", "yes", "on")
     if val := os.environ.get("NANOMUSE_CLOUD_SYNC"):
         raw.setdefault("cloud", {})["sync"] = val.strip().lower() in ("1", "true", "yes", "on")
+    # nanoMuse: the owner-routing default (docs/tasks/executor-handoff-v2.md §九). An
+    # explicit value turns it on or off; 0/false/no puts upstream's rule back. Left unset it
+    # keeps the config file's value (else the field's own default, True).
+    if val := os.environ.get("NANOMUSE_OWNER_ROUTING"):
+        raw.setdefault("sync", {})["owner_routing"] = val.strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
     if val := os.environ.get("NANOMUSE_HUB_NAME"):
         raw.setdefault("hub", {})["name"] = val[:60]
     gui = raw.setdefault("gui", {})

@@ -15,6 +15,9 @@ The decision is one of:
 * ``handoff`` — another device runs it on the conversation it already holds;
 * ``unroutable`` — the named device is offline (or unknown), so the caller says so rather
   than sending the line nowhere.
+
+Turning ``enabled`` off (:func:`resolve`) is upstream's rule again: the default is this
+device, and only a mention moves the work. See ``docs/tasks/executor-handoff-v2.md`` §九.
 """
 
 from __future__ import annotations
@@ -66,6 +69,7 @@ def resolve(
     self_id: str,
     self_name: str,
     owner_id: str,
+    enabled: bool = True,
 ) -> Route:
     """Decide where ``text`` runs.
 
@@ -77,9 +81,16 @@ def resolve(
     clears the owner — the caller records that. A mention of another device hands off, but
     only when the hub says that device is online: an offline owner does not swallow the
     line, it is refused with a reason the caller shows.
+
+    ``enabled`` is the owner-routing switch (``[sync] owner_routing``,
+    ``NANOMUSE_OWNER_ROUTING``). Off is upstream's rule (contract C7, rule 8): only an
+    ``@<device>`` sends work elsewhere, and a plain line always runs here — the owner is
+    then ignored both ways, so a stale one cannot hand the line away. On (the default) is
+    what ``docs/tasks/executor-handoff-v2.md`` asks for. A mention is honoured either way:
+    ``@本机`` still takes the turn back here, so the composer's placeholder never lies.
     """
     mention = parse_mention(text, devices, self_id, self_name)
-    if mention is not None and (mention.text or True):
+    if mention is not None:
         # a mention that resolves is honoured even with empty text (the person may be
         # switching the owner and typing nothing else is odd, but not ours to refuse)
         if mention.self:
@@ -101,7 +112,7 @@ def resolve(
             reason="offline",
         )
     # no mention: the owner runs it. No owner, or the owner is this device: run here.
-    if not owner_id or owner_id == self_id:
+    if not enabled or not owner_id or owner_id == self_id:
         return Route(Where.RUN_HERE, text, device_id=self_id, device_name=self_name)
     if online(devices, owner_id):
         name = ""

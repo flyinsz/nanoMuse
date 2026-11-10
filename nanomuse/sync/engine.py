@@ -327,15 +327,57 @@ class ConversationSync:
         # device redraws the composer without waiting for a pull
         self.svc.bus.publish({"kind": "thread", "thread": thread.meta()})
 
+    def _adopt_owner(self, target: str, thread: Thread | None, owner: str, owner_name: str) -> None:
+        """The owner a pull reported, written to *both* places the engine keeps it (nanoMuse).
+
+        ``route_line`` reads ``state["device_owners"]`` and `Thread.meta()` — what the clients
+        draw the composer from — reads the ``Thread`` field. Writing only the first (which is
+        what a pull used to do) left them disagreeing: the console kept naming the old device
+        while the line already ran on the new one. Both are written here, and the thread index
+        is saved too, so a restart answers ``meta()`` with the same owner before any turn.
+
+        Idempotent: when neither place changed, nothing is saved and nothing is published.
+        ``thread`` None (a side chat this device does not have yet) still records the state, so
+        the owner is right the moment the thread exists — the caller writes the field once it
+        has created it.
+        """
+        owners = self.state.setdefault("device_owners", {})
+        names = self.state.setdefault("device_owner_names", {})
+        state_same = owners.get(target) == owner and names.get(target) == owner_name
+        thread_same = thread is None or (
+            thread.owner_device == owner and thread.owner_device_name == owner_name
+        )
+        if state_same and thread_same:
+            return
+        if not state_same:
+            owners[target] = owner
+            names[target] = owner_name
+            self._save()
+        if thread is not None and not thread_same:
+            thread.owner_device = owner
+            thread.owner_device_name = owner_name
+            saver = getattr(self.svc, "_save_index", None)
+            if callable(saver):
+                saver()
+            # the row went out with the new owner: tell the local UI too. `kind: "thread"`
+            # is what the consoles' reducers know (there is no `case "owner"`), so the row —
+            # and the composer's placeholder with it — redraws without waiting for a turn.
+            self.svc.bus.publish({"kind": "thread", "thread": thread.meta()})
+
     def route_line(self, thread: Thread, text: str) -> Route:
         """Where one line written in ``thread`` should run (nanoMuse). Pure decision, no side
         effect; the caller acts on it and calls :meth:`mark_owner` with the result."""
+        settings = getattr(self.svc, "settings", None)
+        sync_settings = getattr(settings, "sync", None)
+        # default True when an old config never carried the field: the feature's own default
+        enabled = bool(getattr(sync_settings, "owner_routing", True))
         return resolve(
             text,
             self.svc.hub.others(),
             self.svc.hub.device_id,
             self.svc.hub.device_name,
             self.owner_device(thread),
+            enabled=enabled,
         )
 
     def view(self) -> dict[str, Any]:
@@ -563,6 +605,17 @@ class ConversationSync:
             self._working_soon(thread, True, device=working_device)
 
     def turn_finished(self, thread: Thread) -> None:
+        # nanoMuse: this device just ran a turn of the conversation, so it holds the newest
+        # context and becomes its owner (executor handoff v2 §4.1: "谁跑完一轮，就把
+        # owner_device 报成自己"). The `send` path already marks the owner for a line typed
+        # here; this covers the turns that arrive another way — most of all one handed over by
+        # another device (`source == "device"`, which the old `if source == "user"` rule never
+        # reached, so the owner side never refreshed its own owner). A local run where this
+        # device is already the owner changes nothing and is skipped, so the ordinary case
+        # costs no extra write.
+        me = self.svc.hub.device_id
+        if self.owner_device(thread) != me:
+            self.mark_owner(thread, me, self.svc.hub.device_name)
         if self.active and self._eligible(thread):
             self.push_soon(delay=PUSH_DELAY_S)
             self._working_soon(thread, False)
@@ -1166,18 +1219,14 @@ class ConversationSync:
         owner = str(row.get("owner_device") or "")
         owner_name = str(row.get("owner_device_name") or "")
         if owner:
-            self.state.setdefault("device_owners", {})
-            self.state.setdefault("device_owner_names", {})
             target = MAIN_THREAD if kind == "main" else (thread.id if thread is not None else "")
             if target:
-                if (
-                    self.state["device_owners"].get(target) != owner
-                    or self.state["device_owner_names"].get(target) != owner_name
-                ):
-                    self.state["device_owners"][target] = owner
-                    self.state["device_owner_names"][target] = owner_name
-                    self._save()
-                    self.svc.bus.publish({"kind": "owner", "thread": target, "device": owner})
+                # `target` names the thread the owner belongs to — for main that is the main
+                # chat, not `thread` (which may be a side chat of ours that merely carried the
+                # account's main cid). A side chat this device has not got yet is missing here
+                # (the create below makes it): the state is written all the same, and the field
+                # is filled in right after the thread exists.
+                self._adopt_owner(target, self.svc.threads.get(target), owner, owner_name)
         if kind == "main":
             main = self.svc.threads.get(MAIN_THREAD)
             if main is None:
@@ -1208,6 +1257,12 @@ class ConversationSync:
         created.origin_device_name = str(row.get("device_name") or "")
         created.created_at = _iso(row.get("created_at"))
         created.updated_at = _iso(row.get("updated_at"))
+        if owner:
+            # nanoMuse: the side chat is born with its owner (executor handoff v2 §一: a side
+            # chat routes exactly like the main one). The adoption above got no target — there
+            # was no thread yet — so without this a line typed on the synced-in side chat ran
+            # here, in an empty context, instead of going to the device that holds it.
+            self._adopt_owner(created.id, created, owner, owner_name)
         self.state["cids"][created.id] = cid
         self.state["titles"][created.id] = created.title
         self._save()

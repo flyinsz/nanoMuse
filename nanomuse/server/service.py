@@ -61,7 +61,7 @@ from nanomuse.server.outbox import Delivery, DeliveryOutbox
 from nanomuse.server.providers import ChatGPTSignIn, Providers
 from nanomuse.server.push import PushService
 from nanomuse.server.webui import WebUI, current_thread
-from nanomuse.sync import ConversationSync, Where
+from nanomuse.sync import ConversationSync, Where, self_note, system_note
 from nanomuse.telemetry import telemetry
 from nanomuse.tools.browser import Browser
 from nanomuse.tools.coding_tool import CodingAgents
@@ -1234,6 +1234,12 @@ class MuseService:
             event = self.ui.emit({"type": "user", "text": text, "thread": thread_id})
             self.hub.run_remote(thread, text)
             return event
+        # nanoMuse: whether this line really runs here — set by the routing below, read past
+        # the early returns where the owner is recorded and the note folded in. A line a
+        # pending question or the avatar studio takes never runs a turn, so it never makes
+        # this device the owner (§九: the owner follows a finished round).
+        runs_here = False
+        local_note = ""
         if source in ("user", "device"):
             event_data: dict[str, Any] = {"type": "user", "text": text, "thread": thread_id}
             if source in ("user", "device"):
@@ -1268,7 +1274,9 @@ class MuseService:
             if source == "user" and not thread.device:
                 route = self.sync.route_line(thread, text)
                 if route.where is Where.UNROUTABLE:
-                    raise ValueError(f"{route.device_name or '该设备'} 离线，未发送")
+                    raise ValueError(
+                        f"{route.device_name or 'that device'} is offline; the line was not sent"
+                    )
                 text = route.text
                 event_data["text"] = text
                 if route.where is Where.HANDOFF and not attachments:
@@ -1287,10 +1295,17 @@ class MuseService:
                         else event_data
                     )
                     self.sync.mark_owner(thread, route.device_id, route.device_name)
+                    # nanoMuse: one line in front of the words, for the *far* device's model
+                    # alone, saying the sentence is someone else's turn — it runs it there
+                    # rather than mistaking it for its own (C7 rule 8). The note is not part
+                    # of `event_data`: the bubble over here keeps the words as typed, the `@`
+                    # gone and no note, and so does the row the relay carries.
+                    note = system_note(route.device_name, route.device_id)
+                    handed = f"[{note}]\n\n{route.text}" if route.text else f"[{note}]"
                     # the line's own row id travels with it, so the owner writes that row
                     # rather than minting one — one row on the relay, not two
                     self.hub.handoff_to(
-                        thread, route.text, route.device_id, route.device_name,
+                        thread, handed, route.device_id, route.device_name,
                         mid=str(event_data.get("mid") or ""),
                     )
                     # nanoMuse: the line goes up like any other (C8). Without this a handed-off
@@ -1303,8 +1318,19 @@ class MuseService:
                     # watcher shows the wait from the moment the words arrive.
                     self.sync.message_sent(thread, working_device=route.device_id)
                     return event
-                # a line that runs here makes this device the owner: it holds the context now
-                self.sync.mark_owner(thread, self.hub.device_id, self.hub.device_name)
+                # nanoMuse: this line runs here, and `@本机` may have just taken it back from
+                # another device — whose conversation this context came from. One line in
+                # front tells the model the ground shifted under it, so a run that happened
+                # elsewhere is not read as this device's own memory. The owner is read
+                # *before* `mark_owner` below writes this device in; an ownerless
+                # conversation has no such break and takes no note. The note is not folded
+                # into `text` yet: a pending question is answered with the plain words below.
+                if route.where is Where.RUN_HERE and self.sync.owner_device(thread) not in (
+                    "",
+                    self.hub.device_id,
+                ):
+                    local_note = self_note(route.device_name or self.hub.device_name)
+                runs_here = True
             event = self.ui.emit(event_data)
             self.bus.publish({"kind": "thread", "thread": thread.meta()})
             # the person's words reach the account's other devices now (C8), not after the turn
@@ -1335,6 +1361,13 @@ class MuseService:
             )
             if label:
                 thread.purposes[text] = label
+        if runs_here:
+            # nanoMuse: past every early return — the turn really runs here now, so this
+            # device takes the conversation's context (§九: the owner follows a finished
+            # round, not a line that a pending question or the studio took from the agent).
+            self.sync.mark_owner(thread, self.hub.device_id, self.hub.device_name)
+            if local_note:
+                text = f"[{local_note}]\n\n{text}" if text else f"[{local_note}]"
         run = llm_session.run_of(source)
         if once is not None:
             thread.inbox.put_nowait(

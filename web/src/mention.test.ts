@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { mentionPrefix, mentionSuggestions, mentionTarget } from "./mention";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLocaleSetting, t } from "./i18n";
+import zhCN from "./i18n/zh-CN";
+import { isSelfWord, mentionChoices, mentionPrefix, mentionSuggestions, mentionTarget, SELF_WORDS } from "./mention";
 import type { HubDevice } from "./types";
 
 const devices: HubDevice[] = [
@@ -36,5 +38,63 @@ describe("mention", () => {
     expect(mentionTarget("@Chrome hi", devices)).toBeNull();
     expect(mentionTarget("@nobody hi", devices)).toBeNull();
     expect(mentionTarget("hello @Pixel 8", devices)).toBeNull();
+  });
+});
+
+afterEach(() => setLocaleSetting("en"));
+
+describe("SELF_WORDS", () => {
+  it("is the same two words the runtime and the phone parse", () => {
+    // nanomuse/sync/mention.py's SELF_WORDS and DeviceOwner.SELF_WORDS: one table, three
+    // ends. A third word here would promise something the send could not do.
+    expect(SELF_WORDS).toEqual(["本机", "this device"]);
+    expect(SELF_WORDS).toContain("本机");
+    expect(SELF_WORDS).toContain("this device");
+    expect(SELF_WORDS).not.toContain("This machine");
+  });
+
+  it("matches without case, the way the runtime does", () => {
+    expect(isSelfWord("本机")).toBe(true);
+    expect(isSelfWord("@本机")).toBe(true);
+    expect(isSelfWord("this device")).toBe(true);
+    expect(isSelfWord("This Device")).toBe(true);
+    expect(isSelfWord("@THIS DEVICE ")).toBe(true);
+    expect(isSelfWord("This machine")).toBe(false);
+    expect(isSelfWord("this devices")).toBe(false);
+  });
+});
+
+describe("the this-device row the composer offers", () => {
+  it("is offered for a word the runtime accepts as this device", () => {
+    for (const label of ["本机", "this device", "This device", "@本机", "@This device"]) {
+      const [row] = mentionChoices("@", devices, label);
+      expect(row?.self, label).toBe(true);
+      expect(isSelfWord(row!.name), label).toBe(true);
+    }
+  });
+
+  it("is not offered for a word the runtime would ignore", () => {
+    // The bug this replaces: `@This machine` was offered in English, then read as a device
+    // name by the send, so the owner never came back.
+    const rows = mentionChoices("@", devices, "This machine");
+    expect(rows.some((r) => r.self)).toBe(false);
+    expect(rows.map((r) => r.name)).not.toContain("This machine");
+  });
+});
+
+describe("the @本机 placeholder key", () => {
+  it("is @本机 in 简体中文 and a word the runtime reads in English", () => {
+    setLocaleSetting("zh-CN");
+    expect(t("@This device")).toBe("@本机");
+    setLocaleSetting("en");
+    // English is the key itself; the send strips the `@` and the runtime matches without case.
+    const inserted = t("@This device").replace(/^@/, "");
+    expect(isSelfWord(inserted)).toBe(true);
+    expect(inserted.toLowerCase()).toBe("this device");
+  });
+
+  it("is the only key the composer asks for, so no orphan translation is left behind", () => {
+    expect(zhCN["@This device"]).toBe("@本机");
+    expect(zhCN["@This machine"]).toBeUndefined();
   });
 });

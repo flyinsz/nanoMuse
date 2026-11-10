@@ -12,8 +12,24 @@
  */
 import type { HubDevice } from "./types";
 
-/** The words that name this device on their own, one per locale the UI writes in. */
-export const SELF_WORDS = ["本机", "This machine", "This device"];
+/**
+ * nanoMuse: the words that name this device on their own, one per locale the UI writes in.
+ * The same two words as the runtime (`nanomuse/sync/mention.py`'s `SELF_WORDS`) and the
+ * phone (`DeviceOwner.SELF_WORDS`) — one table, so a line means "this device" on every
+ * client. Matched without case, the way both of those match. A third word here would be a
+ * promise the send could not keep.
+ */
+export const SELF_WORDS = ["本机", "this device"];
+
+/**
+ * nanoMuse: whether [word] names this device on its own, matched without case the way the
+ * runtime and the phone match it. The composer offers its this-device row only for a word
+ * this returns true for, so a label the send could not honour is never offered.
+ */
+export function isSelfWord(word: string): boolean {
+  const w = word.trim().replace(/^@/, "").toLowerCase();
+  return SELF_WORDS.some((s) => s.toLowerCase() === w);
+}
 
 /** The row the composer offers for this device itself, `@本机` and all. */
 export interface MentionChoice {
@@ -32,7 +48,9 @@ export function mentionable(devices: HubDevice[]): HubDevice[] {
 /**
  * What the `@` menu offers: this device first, then the account's other devices whose names
  * match. [selfLabel] is the localised name for this device (`@本机`); blank leaves it out (a
- * signed-out console has no device to name).
+ * signed-out console has no device to name), and so does a label that is not one of
+ * `SELF_WORDS` — the row is only worth offering when the runtime would read it as this
+ * device (nanoMuse: an untranslated English label used to be offered and then ignored).
  */
 export function mentionChoices(
   text: string,
@@ -45,7 +63,7 @@ export function mentionChoices(
   const p = prefix.toLowerCase();
   const selfRow: MentionChoice[] = [];
   const label = selfLabel.trim().replace(/^@/, "");
-  if (label && label.toLowerCase().startsWith(p)) {
+  if (label && isSelfWord(label) && label.toLowerCase().startsWith(p)) {
     selfRow.push({ id: "", name: label, online: true, self: true });
   }
   const others: MentionChoice[] = mentionable(devices)

@@ -16,7 +16,10 @@ rules shape it, all for the relay's sake:
   four a second at most.
 * **This device's runs only.** A turn another device handed here is theirs to report, so
   only a thread this device is *running* and may sync (``eligible``) is sent. A frame whose
-  ``from`` is this device is ignored (the relay never echoes our own back anyway).
+  ``from`` is this device is ignored (the relay never echoes our own back anyway), and so is
+  one another device's run published here (its ``remote`` mark, set by
+  ``engine._apply_stream``): this device draws those, it does not report them — reporting one
+  would loop it back through the relay to the device that ran it and on again, forever.
 * **Best effort.** Nothing here is retried, awaited on the turn's path, or worth an error;
   a lost batch only means a moment of text the sync pull still reconciles. The final text
   is never carried here — it goes up over ``push`` as it always did.
@@ -92,6 +95,14 @@ class StreamSender:
     def on_frame(self, msg: dict[str, Any]) -> None:
         """One bus frame. Handles the kinds a run produces; ignores everything else, so a
         caller can pass each and every message of the bus without filtering first."""
+        # nanoMuse: a frame another device's run published here (``engine._apply_stream``
+        # marks each one ``remote``) is not this device's to report — this device only
+        # renders it. Reposting it would send it back up to the relay, which fans it out
+        # again, to the device that ran the turn as well; each of those then reposts it in
+        # turn, and one run becomes an endless loop of frames across the account. Truthy,
+        # not ``is True``: an older or hand-written frame that carries any marker counts.
+        if msg.get("remote"):
+            return
         kind = msg.get("kind")
         if kind not in ("stream_start", "delta", "reasoning_delta", "stream_end", "tool_delta"):
             return

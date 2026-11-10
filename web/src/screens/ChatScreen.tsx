@@ -934,7 +934,7 @@ export function Composer({
   // rule 8). This console itself is offered first, so `@本机` — the way a turn comes back from
   // a device it was handed to — can be picked rather than remembered (§4.2 rule 3).
   const hubDevices = state.hub?.devices ?? [];
-  const mentions = mentionChoices(text, hubDevices, t("@This machine"));
+  const mentions = mentionChoices(text, hubDevices, t("@This device"));
   const target = mentions.length === 0 ? mentionTarget(text, hubDevices) : null;
   const pickDevice = (d: { name: string }) => {
     setText(`@${d.name} `);
@@ -1100,7 +1100,7 @@ export function Composer({
                 ? t("Say what to do with it…")
                 : executor
                   ? executor.here
-                    ? t("@This machine")
+                    ? t("@This device")
                     : t("@{device}", { device: executor.name })
                   : t("Message")
           }
