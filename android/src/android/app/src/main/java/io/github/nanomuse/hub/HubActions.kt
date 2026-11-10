@@ -323,13 +323,28 @@ object HubActions {
                 language = call.args.optString("language"),
             )
         }
+        // nanoMuse: the files the asker brought along (executor handoff v2, topic B2). The
+        // frame names each one by its hash on the relay; they are fetched into this session's
+        // attachments folder and given to the agent's turn, so a handed-off line arrives with
+        // what was attached to it. An asker that sends no `attachments` key gets the old
+        // empty list back and the task runs exactly as before; a file that cannot be fetched
+        // is left out and named for the model rather than failing the whole run.
+        val files = HubAttachmentFetcher.fetchAndAdd(context, sessionId, call.args)
         val relay = relayApprovals(context, call, sessionId)
         running.started(call.id, senderId, conversation, sessionId)
         Provenance.arm(sessionId, Provenance.RUN_HUB) // the turn is another device's, for the record
         val stopped: Boolean
         val result = try {
             runBlocking {
-                HeadlessChatRunner.prompt(context = app, sessionId = sessionId, text = prompt, attachments = emptyList(), thinkingLevel = null, wait = true, timeoutMs = TASK_TIMEOUT_MS)
+                HeadlessChatRunner.prompt(
+                    context = app,
+                    sessionId = sessionId,
+                    text = HubAttachments.withMissed(prompt, files.missed),
+                    attachments = files.attachments,
+                    thinkingLevel = null,
+                    wait = true,
+                    timeoutMs = TASK_TIMEOUT_MS,
+                )
             }
         } finally {
             relay.cancel()

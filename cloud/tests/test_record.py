@@ -363,7 +363,7 @@ async def test_a_turn_on_an_own_key_is_put_up_with_its_files(tmp_path):
     assert (await client.head(f"/v1/blobs/{PNG_SHA}", headers=headers)).status_code == 404
     r = await client.put(f"/v1/blobs/{PNG_SHA}", headers={**headers, "Content-Type": "image/png"}, content=b"not the picture")
     assert r.status_code == 400 and r.json()["error"]["code"] == "hash_mismatch"
-    r = await client.put(f"/v1/blobs/{PNG_SHA}", headers={**headers, "Content-Type": "application/zip"}, content=PNG_1PX)
+    r = await client.put(f"/v1/blobs/{PNG_SHA}", headers={**headers, "Content-Type": "multipart/form-data"}, content=PNG_1PX)
     assert r.status_code == 400
     r = await client.put("/v1/blobs/nothex", headers={**headers, "Content-Type": "image/png"}, content=PNG_1PX)
     assert r.status_code == 400
@@ -722,6 +722,70 @@ async def test_a_partial_turn_says_why_it_ended(tmp_path):
     assert turns["t2"]["status"] == "partial" and "ended" not in turns["t2"]["meta"]
     assert turns["t3"]["status"] == "ok" and "ended" not in turns["t3"]["meta"]
     assert "ended" not in turns["t1"]["request"] and "status" not in turns["t1"]["request"]
+
+
+async def test_a_handoff_may_carry_its_documents_not_only_pictures(tmp_path):
+    """nanoMuse: executor handoff v2 — an attachment handoff sends the documents a turn
+    names (pdf, docx, xlsx, txt, csv, zip...) as files of their own, so the relay takes
+    the document and text families beside the picture, audio and video ones. A blob is
+    data: it is stored by its hash and read back, never executed or unpacked."""
+    app, client, sender, up, cloud = relay(tmp_path)
+    a = await sign_up(client, sender, identifier="docs-a@example.com")
+    ha = {"Authorization": f"Bearer {a['api_key']}"}
+    for mime, body in (
+        ("application/pdf", b"%PDF-1.7 a handoff's report"),
+        ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"PK\x03\x04 docx"),
+        ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", b"PK\x03\x04 xlsx"),
+        ("application/zip", b"PK\x03\x04 archive"),
+        ("application/json", b'{"a": 1}'),
+        ("text/markdown", b"# a note\n"),
+        ("text/csv", b"a,b\n1,2\n"),
+        ("text/plain; charset=utf-8", b"hello"),
+    ):
+        data = body
+        sha = hashlib.sha256(data).hexdigest()
+        r = await client.put(f"/v1/blobs/{sha}", headers={**ha, "Content-Type": mime}, content=data)
+        assert r.status_code == 200, (mime, r.text)
+        # the parameter is dropped and the type kept lowercase, as the pictures were
+        assert r.json() == {"sha256": sha, "bytes": len(data), "mime": mime.split(";")[0], "known": False}
+        # the file goes up under its hash and comes back as it went in: data, not code
+        assert not cloud.media.path(sha).name.endswith((".pdf", ".docx", ".zip"))
+        got = await client.get(f"/v1/blobs/{sha}", headers=ha)
+        assert got.status_code == 200 and got.content == data and got.headers["content-type"].startswith(mime.split(";")[0])
+    # the three families from before still go up
+    r = await client.put(f"/v1/blobs/{PNG_SHA}", headers={**ha, "Content-Type": "image/png"}, content=PNG_1PX)
+    assert r.status_code == 200
+    # and what is none of them is still refused, the message naming the whole range now
+    r = await client.put(f"/v1/blobs/{PNG_SHA}", headers={**ha, "Content-Type": "multipart/form-data"}, content=PNG_1PX)
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_request"
+    assert "application/*" in r.json()["error"]["message"]
+    # no mime at all is refused rather than kept under a blank type
+    r = await client.put(f"/v1/blobs/{PNG_SHA}", headers={**ha, "Content-Type": ""}, content=PNG_1PX)
+    assert r.status_code == 400
+
+
+async def test_the_new_types_are_still_capped_and_measured(tmp_path):
+    """nanoMuse: executor handoff v2 — widening what may go up opens no quota: an empty
+    file, one past BLOB_MAX_BYTES and one past the account's MEDIA_ACCOUNT_MAX_MB are
+    refused whatever their type, and a document is measured like a picture."""
+    app, client, sender, up, cloud = relay(tmp_path, media_account_max_mb=1)
+    a = await sign_up(client, sender, identifier="docs-cap-a@example.com")
+    ha = {"Authorization": f"Bearer {a['api_key']}"}
+    # an empty file is an empty file whatever it claims to be
+    r = await client.put(f"/v1/blobs/{hashlib.sha256(b'').hexdigest()}", headers={**ha, "Content-Type": "application/pdf"}, content=b"")
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_request"
+    # one past the per-file cap
+    big = b"%PDF" + b"\0" * cloud.s.blob_max_bytes
+    r = await client.put(f"/v1/blobs/{hashlib.sha256(big).hexdigest()}", headers={**ha, "Content-Type": "application/pdf"}, content=big)
+    assert r.status_code == 413 and r.json()["error"]["code"] == "too_large"
+    assert not cloud.media.has(hashlib.sha256(big).hexdigest())
+    # a document is counted against the account's cap like any other file
+    ok = b"%PDF-1.7 " + b"\3" * (700 * 1024)
+    assert (await client.put(f"/v1/blobs/{hashlib.sha256(ok).hexdigest()}", headers={**ha, "Content-Type": "application/pdf"}, content=ok)).status_code == 200
+    more = b"%PDF-1.7 " + b"\4" * (700 * 1024)
+    r = await client.put(f"/v1/blobs/{hashlib.sha256(more).hexdigest()}", headers={**ha, "Content-Type": "text/markdown"}, content=more)
+    assert r.status_code == 413 and r.json()["error"]["code"] == "quota_exceeded"
+    assert not cloud.media.has(hashlib.sha256(more).hexdigest())
 
 
 def test_pace_counts_within_a_sliding_window():

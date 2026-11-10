@@ -2267,7 +2267,10 @@ class Cloud:
     #: an uploaded turn's `messages` and `response` together, as JSON characters
     TURN_MAX_CHARS = 2_000_000
     #: what a device may hand the relay as a file: pictures, audio and the avatar's clips
-    BLOB_MIMES = ("image/", "audio/", "video/")
+    # nanoMuse: executor handoff v2 — a handoff carries its attachments whole, so the
+    # documents a turn names (pdf, docx, xlsx, txt, csv, zip...) go up too. Short prefixes
+    # as before, never a list of extensions.
+    BLOB_MIMES = ("image/", "audio/", "video/", "application/", "text/")
 
     def record_turn(
         self,
@@ -2593,7 +2596,11 @@ class Cloud:
         self._upload_allowed(caller)
         mime = (mime or "").split(";")[0].strip().lower()[:80]
         if not any(mime.startswith(p) for p in self.BLOB_MIMES):
-            raise CloudError(400, "bad_request", "a file is a picture, an audio clip or a video (Content-Type image/*, audio/*, video/*)")
+            raise CloudError(
+                400,
+                "bad_request",
+                "a file is a picture, an audio clip, a video or a document (Content-Type image/*, audio/*, video/*, application/*, text/*)",
+            )
         if not data:
             raise CloudError(400, "bad_request", "an empty file")
         if len(data) > self.s.blob_max_bytes:

@@ -271,6 +271,34 @@ class CloudClient:
             out = {}
         return out if isinstance(out, dict) else {}
 
+    async def get_blob(self, sha256: str) -> bytes:
+        """The file's bytes (``GET /v1/blobs/{sha256}``). # nanoMuse: the way back for a
+        file another device put up — the relay only serves it to an account that holds a
+        reference to it, so a 404 here also means "not ours (yet)", not only "gone".
+
+        Raises :class:`CloudError` — ``not_found`` when the relay will not serve it, so a
+        caller never mistakes an empty body for a real (empty) file."""
+        try:
+            response = await self._client.get(
+                f"{self.base_url}/v1/blobs/{sha256}",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+        except httpx.TimeoutException:
+            raise CloudError(0, "timeout", f"{self.base_url} did not answer in time") from None
+        except httpx.HTTPError as exc:
+            raise CloudError(0, "offline", f"Cannot reach {self.base_url}: {exc}") from None
+        if response.status_code >= 400:
+            try:
+                err = (response.json() or {}).get("error") or {}
+            except ValueError:
+                err = {}
+            raise CloudError(
+                response.status_code,
+                str(err.get("code") or f"http_{response.status_code}"),
+                str(err.get("message") or response.text[:200]),
+            )
+        return response.content
+
     async def sessions(self) -> list[dict[str, Any]]:
         data = await self._request("GET", "/v1/me/sessions")
         sessions = data.get("sessions")
