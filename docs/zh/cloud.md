@@ -177,6 +177,7 @@ PUT    /v1/sync/state   {enabled}       → the same; false deletes everything s
 GET    /v1/sync/changes ?since=0&limit=500&scope=all|main&tail=K   → {cursor, more, conversations[], messages[], skipped?}
 POST   /v1/sync/changes {device, conversations[], messages[]}   → {cursor, accepted, rejected[{cid | mid, reason, cid_main?}]}
 POST   /v1/sync/working {cid, working, device?, state?, detail?}   → 204; the hub tells the other devices (0.31: state and step ride along)   404 no_conversation
+POST   /v1/sync/stream  {cid, device?, round, seq, delta?, reasoning?, tool?, done?}   → 204; the hub tells the other devices a run as it happens (0.32, batched, nothing stored)   404 no_conversation
 DELETE /v1/sync/changes                 → the state, counts at zero     everything stored, switch unchanged
 DELETE /v1/sync/conversations/{cid}     → {cursor, deleted: true}      a tombstone the other devices apply; 404 no_conversation
 ```
@@ -185,11 +186,11 @@ DELETE /v1/sync/conversations/{cid}     → {cursor, deleted: true}      a tombs
 
 中继 0.25 起，只要账号有主要聊天，tail 页就必定包含其对话行，即使 K 条消息都不属于它。新设备因此可以首次拉取就采用 `cid_main`，不必先新建第二条主要聊天再从 `main_exists` 得知正确 ID。1.0.3 客户端将新增行视为普通对话行，行为兼容。其他 `scope` 返回 400 `bad_scope`。
 
-`POST /v1/sync/working` 表示 `device` 或 `X-Nanomuse-Device` 指定设备正在 `cid` 中回答，值为 `working: true`，或已结束，值为 `false`。中继将活跃状态放在内存十分钟，不写数据库，重启即清除。状态接口的 `working` 返回 `[{cid, from, device_name, working, at}]`，同时向账号其他 socket 发送 `working` 帧，见 [hub.md](hub.md#frames)。0.31 起，`working: true` 还可附 `state`，值为 `working` 或 `waiting`，以及 `detail`，即模型描述当前步骤的文字，最多 160 字符。帧和状态列表都会保留两项，其他设备可显示任务进展。请求正文超过 `MAX_REQUEST_BYTES` 时返回 413 `too_large`，0.20 起默认 16 MiB，并说明「请求正文 N MB；这个中继最多接受 M MB」。
+`POST /v1/sync/working` 表示 `device` 或 `X-Nanomuse-Device` 指定设备正在 `cid` 中回答，值为 `working: true`，或已结束，值为 `false`。中继将活跃状态放在内存十分钟，不写数据库，重启即清除。状态接口的 `working` 返回 `[{cid, from, device_name, working, at}]`，同时向账号其他 socket 发送 `working` 帧，见 [hub.md](hub.md#frames)。0.31 起，`working: true` 还可附 `state`，值为 `working` 或 `waiting`，以及 `detail`，即模型描述当前步骤的文字，最多 160 字符。帧和状态列表都会保留两项，其他设备可显示任务进展。0.32 起，`POST /v1/sync/stream` 上报任务本身：设备提交 `{cid, device, round, seq, delta?, reasoning?, tool?, done?}`，即正在写的内容、推理过程或调用的工具（`{name, stage: call | result, summary?, ok?}`），账号下其他 socket 收到 `stream` 帧（见 [hub.md](hub.md#frames)）并随写随画。`round` 是该轮任务自己的 ID，同一对话的两次任务互不覆盖；`done: true` 表示结束。缺少 `cid`、缺少 `round` 或没有可绘制内容的帧返回 400 `bad_request`，未知或已删除的对话返回 404 `no_conversation`，同步关闭返回 409 `sync_off`。分批由发送方控制（每秒几帧，不是每个字一帧），**不落库**，错过的设备仍通过 `POST /v1/sync/changes` 拿到最终文本。请求正文超过 `MAX_REQUEST_BYTES` 时返回 413 `too_large`，0.20 起默认 16 MiB，并说明「请求正文 N MB；这个中继最多接受 M MB」。
 
 重试必须沿用原 `mid`，即使中继已经接受消息、只是响应丢失，也不能生成新 ID。桌面使用设备、本地会话和本地消息行 ID 生成新消息 ID，同时继续识别已持久保存的旧 ID。允许的 ID 格式及其他客户端的 UUID 不变。上传前先保存对话映射，因此响应丢失后重启也会沿用同一对话 ID。
 
-对话格式为 `{cid, kind: main | side, title, device, device_name, created_at, updated_at, deleted, seq}`，消息格式为 `{mid, cid, seq, device, device_name, role: user | assistant, text, truncated, attachments[{name, mime, size}], created_at, deleted}`。`cid`、`mid` 是设备生成、无需解释内容含义的 ID，长度 4–64，使用 `a-z 0-9 . _ : -` 并转成小写；时间使用 Unix 秒。每个接受的变更取得账号下一个 `seq`。设备保存已拉取的最大 `cursor`，下次以它作为 `since=`。
+对话格式为 `{cid, kind: main | side, title, device, device_name, owner_device, owner_device_name, created_at, updated_at, deleted, seq}`，消息格式为 `{mid, cid, seq, device, device_name, role: user | assistant, text, truncated, attachments[{name, mime, size}], created_at, deleted}`。`cid`、`mid` 是设备生成、无需解释内容含义的 ID，长度 4–64，使用 `a-z 0-9 . _ : -` 并转成小写；时间使用 Unix 秒。每个接受的变更取得账号下一个 `seq`。设备保存已拉取的最大 `cursor`，下次以它作为 `since=`。`owner_device` 是中继 0.32 起记录的**属主**，即跑过该对话最后一轮任务的设备，其本地文件持有完整上下文；`owner_device_name` 是它的显示名。设备从拉取结果读到它，默认把下一句发给它。没有任何设备跑过该对话时为空，推送未指定属主时保留中继已有的值。
 
 推送具有幂等性，即同一内容重试不会重复创建。已知 `mid` 保持原样，除非新行为墓碑记录，也就是用于同步删除状态的标记；已知 `cid` 接受较新标题。中继 0.25 起，晚于中继时钟一周以上、或早于对话开始的时间，会按对话 `created_at` 处理。旧中继以创建时间判断这一周，导致超过一周的聊天改名都被丢弃。每次最多推送 200 条消息或对话，超过返回 413 `too_many_messages`。
 

@@ -12,6 +12,7 @@ import { api, AuthError, connectWs, getToken } from "./api";
 import { getLocale, t } from "./i18n";
 import { liveWorking } from "./presence";
 import { registerWorker, setAppBadge } from "./push";
+import { applyStreamPart, dropConversation, settleConversation, startStreamPart, type DeviceStream } from "./stream-buckets";
 import { useTheme } from "./theme";
 import { readStorage, writeStorage } from "./util";
 import type {
@@ -99,6 +100,12 @@ export interface AppState {
   events: Record<string, TimelineEvent[]>;
   hasMore: Record<string, boolean>;
   streams: Record<string, Stream | undefined>;
+  /**
+   * Runs under way on the account's *other* devices, one bucket per run (contract C7). The
+   * local stream above stays keyed by thread; these are kept apart so two devices drawing
+   * into the same chat do not overwrite one another.
+   */
+  deviceStreams: Record<string, DeviceStream | undefined>;
   goals: Goal[];
   settings: SettingsView | null;
   goalsVersion: number;
@@ -223,6 +230,7 @@ const initial: AppState = {
   events: {},
   hasMore: {},
   streams: {},
+  deviceStreams: {},
   goals: [],
   settings: null,
   goalsVersion: 0,
@@ -327,6 +335,7 @@ function reducer(state: AppState, action: Action): AppState {
         profile: s.profile,
         status: s.status,
         streams: {},
+        deviceStreams: {},
         threads: s.threads,
         goals: s.goals,
         settings: s.settings,
@@ -407,6 +416,9 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
       const streams = { ...state.streams };
       const stream = streams[ev.thread];
       if (ev.type === "assistant" && stream && stream.id === ev.id) streams[ev.thread] = undefined;
+      // the reply a run on another device was drawing has landed over sync: that run goes
+      const deviceStreams =
+        ev.type === "assistant" ? settleConversation(state.deviceStreams, ev.thread, !!ev.synced) : state.deviceStreams;
       const threads = state.threads.map((t) =>
         t.id === ev.thread && msg.kind === "event" ? { ...t, updated_at: ev.ts } : t,
       );
@@ -423,6 +435,7 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
       return {
         ...state,
         streams,
+        deviceStreams,
         threads,
         working,
         events: loaded ? { ...state.events, [ev.thread]: upsertEvent(state.events[ev.thread], ev) } : state.events,
@@ -433,11 +446,15 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
       };
     }
     case "stream_start":
+      // a run on another device arrives as this device's own frames, marked `remote` (C7):
+      // it goes in its own bucket, never into `streams[thread]`, or it would overwrite a local run
+      if (msg.remote) return { ...state, deviceStreams: startStreamPart(state.deviceStreams, { id: msg.id, conv: msg.thread }) };
       return {
         ...state,
         streams: { ...state.streams, [msg.thread]: { id: msg.id, text: "", reasoning: "", ended: false } },
       };
     case "delta": {
+      if (msg.remote) return { ...state, deviceStreams: applyStreamPart(state.deviceStreams, { id: msg.id, conv: msg.thread, delta: msg.text }) };
       const current = state.streams[msg.thread];
       const stream: Stream =
         current && current.id === msg.id
@@ -446,6 +463,7 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
       return { ...state, streams: { ...state.streams, [msg.thread]: stream } };
     }
     case "reasoning_delta": {
+      if (msg.remote) return { ...state, deviceStreams: applyStreamPart(state.deviceStreams, { id: msg.id, conv: msg.thread, reasoning: msg.text }) };
       const current = state.streams[msg.thread];
       const stream: Stream =
         current && current.id === msg.id
@@ -453,7 +471,13 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
           : { id: msg.id, text: "", reasoning: msg.text, ended: false };
       return { ...state, streams: { ...state.streams, [msg.thread]: stream } };
     }
+    case "tool_delta": {
+      // the step a run elsewhere reached for; this device's own runs spell steps out in events
+      if (!msg.remote) return state;
+      return { ...state, deviceStreams: applyStreamPart(state.deviceStreams, { id: msg.id, conv: msg.thread, tool: { name: msg.name, stage: msg.stage } }) };
+    }
     case "stream_end": {
+      if (msg.remote) return { ...state, deviceStreams: applyStreamPart(state.deviceStreams, { id: msg.id, conv: msg.thread, done: true }) };
       const current = state.streams[msg.thread];
       if (!current || current.id !== msg.id) return state;
       // Keep it until the persisted assistant event replaces it (avoids flicker);
@@ -481,6 +505,7 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
         holds: state.holds.filter((h) => h.thread !== msg.thread),
         threads: state.threads.filter((t) => t.id !== msg.thread),
         pendingApprovals: state.pendingApprovals.filter((a) => a.thread !== msg.thread),
+        deviceStreams: dropConversation(state.deviceStreams, msg.thread),
         activeThread: state.activeThread === msg.thread ? "main" : state.activeThread,
       };
     }
@@ -490,6 +515,7 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
         events: { ...state.events, [msg.thread]: [] },
         holds: state.holds.filter((h) => h.thread !== msg.thread),
         pendingApprovals: state.pendingApprovals.filter((a) => a.thread !== msg.thread),
+        deviceStreams: dropConversation(state.deviceStreams, msg.thread),
       };
     case "event_removed": {
       const list = state.events[msg.thread];
@@ -508,6 +534,26 @@ function applyWs(state: AppState, msg: WsMessage): AppState {
       if (on) return { ...state, working: { ...state.working, [who.thread]: who } };
       if (!current || current.device !== who.device) return state;
       return { ...state, working: { ...state.working, [who.thread]: undefined } };
+    }
+    case "stream": {
+      // Fallback for a relay `stream` frame the runtime did not translate (contract C7). The
+      // usual path is `stream_start` and friends above, marked `remote`; this keeps a page
+      // drawing a run when nothing turned the frame into those. The id is `{round}:{device}`,
+      // matching the runtime's, so a run seen both ways lands in one bucket either way.
+      const conv = (msg.thread || "").trim();
+      const round = (msg.round || "").trim();
+      const device = (msg.from || "").trim();
+      if (!conv || !round) return state;
+      const id = `${round}:${device}`;
+      let buckets = startStreamPart(state.deviceStreams, { id, conv, deviceName: msg.device_name });
+      if (msg.delta || msg.reasoning || msg.tool || msg.done) {
+        buckets = applyStreamPart(
+          buckets,
+          { id, conv, delta: msg.delta, reasoning: msg.reasoning, tool: msg.tool, done: msg.done },
+          Date.now(),
+        );
+      }
+      return { ...state, deviceStreams: buckets };
     }
     case "goals":
       return { ...state, goalsVersion: state.goalsVersion + 1 };

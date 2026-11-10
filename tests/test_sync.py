@@ -67,8 +67,13 @@ def test_mention_takes_a_device_name_off_the_front() -> None:
     # "Mac" starts two names; the one online is meant
     m = parse_mention("@mac hello", DEVICES, "pc-self")
     assert m is not None and m.device_id == "mac-2"
-    # this device is never a target; an unknown name is an ordinary message
-    assert parse_mention("@Desk hi", DEVICES, "pc-self") is None
+    # nanoMuse: this device *is* a target now — `@Desk` (its own name) comes back as self
+    m = parse_mention("@Desk hi", DEVICES, "pc-self")
+    assert m is not None and m.device_id == "pc-self" and m.self and m.text == "hi"
+    # nanoMuse: `@本机` also means this device, whatever it is called
+    m = parse_mention("@本机 帮我看看", DEVICES, "pc-self", "Desk")
+    assert m is not None and m.device_id == "pc-self" and m.self and m.text == "帮我看看"
+    # an unknown name is still an ordinary message
     assert parse_mention("@nobody hi", DEVICES, "pc-self") is None
     assert parse_mention("hello @Pixel 8", DEVICES, "pc-self") is None
     assert parse_mention("@", DEVICES, "pc-self") is None
@@ -575,8 +580,17 @@ def test_signed_out_runtimes_do_not_sync(
 
 # ----------------------------------------------------------------------------- @device in the composer
 def test_a_mention_hands_the_turn_to_the_device(synced, monkeypatch: pytest.MonkeyPatch) -> None:
+    """nanoMuse: `@<device>` at the front hands the line to that device on the conversation it
+    holds — the bubble keeps the text without the mention, and the line goes over the hub, not
+    through this device's own agent."""
     client, service, llm, relay = synced
     monkeypatch.setattr(service.hub, "others", lambda: [d for d in DEVICES if d["id"] != "pc-self"])
+    sent: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        service.hub,
+        "handoff_to",
+        lambda thread, text, device_id, device_name: sent.append((text, device_id, device_name)),
+    )
     llm.script.append(LLMResponse(content="Asked the phone.", finish_reason="stop"))
     r = client.post(
         f"/api/threads/{MAIN_THREAD}/send", json={"text": "@Pixel 8 what is on the screen?"}
@@ -588,16 +602,22 @@ def test_a_mention_hands_the_turn_to_the_device(synced, monkeypatch: pytest.Monk
         and ev["to_device"] == "phone-1"
         and ev["to_device_name"] == "Pixel 8"
     )
-    wait_for(lambda: llm.calls)
-    user = [m.content for m in llm.calls[0]["messages"] if m.role.value == "user"][-1]
-    assert user.startswith("[" + system_note("Pixel 8", "phone-1")) and user.endswith(
-        "what is on the screen?"
+    # handed off: no local model call, and the text arrived without the mention
+    wait_for(lambda: sent)
+    assert sent[0] == ("what is on the screen?", "phone-1", "Pixel 8")
+    assert not llm.calls
+    # the owner moved to the phone
+    assert service.sync.owner_device(service.threads[MAIN_THREAD]) == "phone-1"
+    # a mention of this device takes it back: it runs here (no handoff)
+    sent.clear()
+    client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "@本机 你好"})
+    wait_for(
+        lambda: "你好" in [m.content for m in llm.calls[-1]["messages"] if m.role.value == "user"]
     )
+    assert not sent and service.sync.owner_device(service.threads[MAIN_THREAD]) == "pc-self"
     # no match: the text stays as typed, nothing is addressed
     r = client.post(f"/api/threads/{MAIN_THREAD}/send", json={"text": "@everyone hello"})
     assert r.json()["event"]["text"] == "@everyone hello" and "to_device" not in r.json()["event"]
-    # the synced copy carries the text without the mention
-    wait_for(lambda: any(m["text"] == "what is on the screen?" for m in relay.msgs.values()))
 
 
 # ----------------------------------------------------------------------------- C8: one thread

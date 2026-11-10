@@ -22,6 +22,12 @@ data class RemoteConversation(
     val updatedAt: Long,
     val deleted: Boolean,
     val seq: Long,
+    // nanoMuse: the device holding this conversation's context (executor handoff v2, relay §B).
+    // Not `device` (who started the chat): this is who ran the last turn, and whose context the
+    // next sentence continues. Empty on an older relay, or a row pushed before the column existed.
+    val ownerDevice: String = "",
+    // nanoMuse: the relay's display name for `ownerDevice` (relay §B); empty when it has none.
+    val ownerDeviceName: String = "",
 )
 
 /** One message as the relay lists it. */
@@ -84,6 +90,10 @@ data class OutConversation(
     val createdAt: Long,
     val updatedAt: Long,
     val deleted: Boolean = false,
+    // nanoMuse: who holds this conversation's context now (executor handoff v2, relay §A). The
+    // relay takes the first non-empty value it is given and never clears a real owner with a
+    // blank one, so this is only filled when this phone has something to say.
+    val ownerDevice: String = "",
 )
 
 /** A message as this device posts it; `deleted` makes it a tombstone for a known `mid`. */

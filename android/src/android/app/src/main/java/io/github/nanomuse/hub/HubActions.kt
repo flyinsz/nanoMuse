@@ -292,16 +292,37 @@ object HubActions {
         val app = context.applicationContext as? MinisApp
         if (app == null || !app.subsystemsReady()) { call.fail("not_ready", "nanoMuse on the phone is still starting"); return }
         val senderId = call.from.optString("id")
+        // nanoMuse: a handed-off line runs on the conversation *this* device already holds
+        // (executor handoff v2 §4.2). The asker knows that conversation only as the relay's cid,
+        // so `handoff` + `thread` name it: resolve the cid to the local session the sync engine
+        // mapped, and run there — the whole point is to keep the context (tool traces, reasoning,
+        // pictures) that lives only on this device. Absent (an older asker, or a plain
+        // cross-device task), the upstream path below runs unchanged and opens its own chat.
+        val handoffCid = if (call.args.optBoolean("handoff")) call.args.optString("thread").trim() else ""
+        val handedSession = if (handoffCid.isNotEmpty()) {
+            runBlocking { io.github.nanomuse.sync.ConversationSync.sessionOf(handoffCid) }
+        } else {
+            null
+        }
         val conversation = running.conversationKey(senderId, call.args.optString("conversation"))
-        val sessionId = runBlocking { sessionFor(app, conversation, call.senderName) }
+        val sessionId = handedSession ?: runBlocking { sessionFor(app, conversation, call.senderName) }
         if (sessionId == null) { call.fail("no_model", "the phone has no model to think with; sign in to nanoMuse Cloud there"); return }
         call.event(JSONObject().put("stage", "thinking").put("session", sessionId))
         AgentForegroundService.startService(app, sessionCount = 1, toolStatus = context.getString(R.string.nm_hub_task_from, call.senderName))
-        val prompt = HubTasks.prompt(
-            text,
-            prefix = if (call.senderKind == "web") null else context.getString(R.string.nm_hub_task_prefix, call.senderName),
-            language = call.args.optString("language"),
-        )
+        // a handed-off line is not a task addressed to this device: it is this conversation's own
+        // next turn, already written by the asker (which pushed it, C8). So no "From <device>"
+        // preamble, and the row it writes keeps the asker's id — the relay then sees one row for
+        // the line rather than two (see `handoff_to` on the runtime side).
+        val handedMid = if (handoffCid.isNotEmpty()) call.args.optString("mid").trim() else ""
+        val prompt = if (handoffCid.isNotEmpty()) {
+            HubTasks.prompt(text, prefix = null, language = call.args.optString("language"))
+        } else {
+            HubTasks.prompt(
+                text,
+                prefix = if (call.senderKind == "web") null else context.getString(R.string.nm_hub_task_prefix, call.senderName),
+                language = call.args.optString("language"),
+            )
+        }
         val relay = relayApprovals(context, call, sessionId)
         running.started(call.id, senderId, conversation, sessionId)
         Provenance.arm(sessionId, Provenance.RUN_HUB) // the turn is another device's, for the record
@@ -314,13 +335,21 @@ object HubActions {
             relay.cancel()
             stopped = running.finished(call.id)
         }
+        // nanoMuse: this device ran the turn, so it holds the conversation's context now
+        // (executor handoff v2 §4.1) — recorded once the run is done, which is the moment the
+        // traces and reasoning are all here. Recorded even when the run failed or timed out: it
+        // still ran here, and the local thread is where whatever it produced lives.
+        if (handoffCid.isNotEmpty() && !stopped) {
+            runBlocking { io.github.nanomuse.sync.ConversationSync.claimNow(sessionId) }
+        }
         if (stopped) { call.fail("cancelled", "${call.senderName} stopped this task"); return }
         val answer = result.responseText?.trim().orEmpty()
         if (result.timedOut) { call.fail("timeout", "the phone's agent did not finish within ten minutes"); return }
         if (result.status == "Error" && answer.isEmpty()) { call.fail("failed", "the phone's agent could not run this"); return }
         call.result(
             JSONObject().put("text", answer.ifBlank { "(no answer)" }).put("conversation", conversation).put("session", sessionId)
-                .put("device", Hub.name(context)).put("status", result.status),
+                .put("device", Hub.name(context)).put("status", result.status)
+                .apply { if (handedMid.isNotEmpty()) put("mid", handedMid) },
         )
     }
 

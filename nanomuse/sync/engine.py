@@ -70,6 +70,8 @@ from nanomuse.logger import logger
 from nanomuse.schema import Message
 from nanomuse.server.events import MAIN_THREAD, now_iso
 from nanomuse.sync.client import SyncClient
+from nanomuse.sync.owner import Route, resolve
+from nanomuse.sync.stream import StreamSender
 
 if TYPE_CHECKING:
     from nanomuse.server.service import MuseService, Thread
@@ -90,6 +92,11 @@ PRESENCE_INTERVAL_S = 2.0
 # how often the status watcher checks it was not dropped for slowness (a full queue in
 # EventBus.publish discards the subscriber; the watcher notices and subscribes again)
 WATCH_POLL_S = 30.0
+# nanoMuse: how long the stream sender waits between two batches of one run. One frame a
+# token would hit the relay's FRAMES_PER_S=60; at 0.25 s a batch is at most four a second,
+# fifteen times under the ceiling, and the text still reads as it is written. Mirrors the
+# presence throttle above (PRESENCE_INTERVAL_S).
+STREAM_INTERVAL_S = 0.25
 
 
 def new_cid() -> str:
@@ -125,6 +132,9 @@ class ConversationSync:
             "side_chats": bool(svc.settings.sync.side_chats),
             "cids": {},  # thread id → cid
             "titles": {},  # thread id → the title last pushed
+            # nanoMuse: thread id → the device that last ran a turn of it (its context owner)
+            "device_owners": {},
+            "device_owner_names": {},  # thread id → that device's display name
             # C10: thread id → the account (`account.id`) it was synced with; absent = none
             "owners": {},
             # C10: account id → the thread that holds that account's main chat while another
@@ -133,6 +143,9 @@ class ConversationSync:
         }
         self._load()
         self.client = SyncClient(svc.hub.cloud)
+        # nanoMuse: this device's runs, sent to the account's other devices as they happen,
+        # off the same bus the presence path reads (see nanomuse/sync/stream.py)
+        self.streams = StreamSender(self)
         self._push_task: asyncio.Task[None] | None = None
         self._pull_task: asyncio.Task[int] | None = None
         self._timer: asyncio.Task[None] | None = None
@@ -148,6 +161,9 @@ class ConversationSync:
         # presence (C9): cid → {thread, device, device_name, state, detail, at} for the other
         # devices' turns under way; a frame says so, a reply or ten minutes clears it
         self.working: dict[str, dict[str, Any]] = {}
+        # nanoMuse: thread id → the id of the remote run currently drawn there, so a new
+        # `round` from another device opens a fresh bubble instead of appending to the old
+        self._remote_streams: dict[str, str] = {}
         # a one-off pull from zero waiting its turn (side chats just turned on)
         self._pull_from_zero = False
         # a 401 from the relay: nothing more until the next sign-in
@@ -171,7 +187,7 @@ class ConversationSync:
             for key in ("account_id", "cursor", "enabled", "side_chats"):
                 if key in data:
                     self.state[key] = data[key]
-            for key in ("cids", "titles", "owners", "mains"):
+            for key in ("cids", "titles", "owners", "mains", "device_owners", "device_owner_names"):
                 if isinstance(data.get(key), dict):
                     self.state[key] = {str(k): str(v) for k, v in data[key].items()}
 
@@ -269,6 +285,59 @@ class ConversationSync:
         self._adopt(thread.id)
         return cid
 
+    # ------------------------------------------------------------------ nanoMuse: whose turn
+    def owner_device(self, thread: Thread) -> str:
+        """The device that last ran a turn of this conversation here (its id), or "". Set by
+        :meth:`mark_owner` on every line that runs here or is handed elsewhere, and reported
+        to the relay with the conversation row so the other devices read it off a pull."""
+        return str(self.state.get("device_owners", {}).get(thread.id) or "")
+
+    def owner_name(self, thread: Thread) -> str:
+        """The display name of the owner device, "" when none is known."""
+        return str(self.state.get("device_owner_names", {}).get(thread.id) or "")
+
+    def mark_owner(self, thread: Thread, device_id: str, device_name: str = "") -> None:
+        """Record that ``device_id`` holds this conversation's context now.
+
+        Called by the caller of :meth:`route_line`: this device when the line runs here, the
+        other device when it is handed there. Persisted (it survives a restart, unlike the
+        relay's in-memory presence) and pushed with the conversation row.
+
+        The thread carries the pair too ([Thread.owner_device]), which is what `meta()` serves
+        to the clients: set here, at the one place that decides whose turn is next, so a client
+        never has to ask the sync engine (and a console that only reads thread rows still knows
+        who the composer is addressing)."""
+        thread.owner_device = device_id
+        thread.owner_device_name = device_name
+        # the thread file carries it too, so a restart answers `meta()` with the owner before any
+        # turn of the session has run (the thread index is what `_load_threads` reads back)
+        saver = getattr(self.svc, "_save_index", None)
+        if callable(saver):
+            saver()
+        owners = self.state.setdefault("device_owners", {})
+        names = self.state.setdefault("device_owner_names", {})
+        if owners.get(thread.id) == device_id and names.get(thread.id) == device_name:
+            return
+        owners[thread.id] = device_id
+        names[thread.id] = device_name
+        self._save()
+        if self.active and self._eligible(thread):
+            self.push_soon(delay=0.2)
+        # the row went out with the new owner: tell the local UI too, so a console open on this
+        # device redraws the composer without waiting for a pull
+        self.svc.bus.publish({"kind": "thread", "thread": thread.meta()})
+
+    def route_line(self, thread: Thread, text: str) -> Route:
+        """Where one line written in ``thread`` should run (nanoMuse). Pure decision, no side
+        effect; the caller acts on it and calls :meth:`mark_owner` with the result."""
+        return resolve(
+            text,
+            self.svc.hub.others(),
+            self.svc.hub.device_id,
+            self.svc.hub.device_name,
+            self.owner_device(thread),
+        )
+
     def view(self) -> dict[str, Any]:
         """What the Data controls page shows: the switch, whether it can be used, the cursor."""
         return {
@@ -340,6 +409,7 @@ class ConversationSync:
             self.working.clear()
             self._announced.clear()
             self._presence_scheduled.clear()
+            self._remote_streams.clear()
             self._save()
             self._rehome_main(previous, account_id)
             if previous:
@@ -478,19 +548,26 @@ class ConversationSync:
         return out
 
     # ------------------------------------------------------------------ hooks from the service
-    def message_sent(self, thread: Thread) -> None:
+    def message_sent(self, thread: Thread, working_device: str = "") -> None:
         """The person's message is on the timeline: it goes up now (C8, real time), not
-        when the turn ends — and right after it, ``working: true`` (C9)."""
+        when the turn ends — and right after it, ``working: true`` (C9).
+
+        [working_device] names who is about to run the turn. Empty means this device, the
+        ordinary case. A handed-off line passes the *target*: the bubble goes up from here,
+        but the turn runs there, and a presence that named this device would have every
+        other device draw "Nas-by-Donny is working" while that machine sits idle waiting
+        for the reply it never started.
+        """
         if self.active and self._eligible(thread):
             self.push_soon(delay=0.0)
-            self._working_soon(thread, True)
+            self._working_soon(thread, True, device=working_device)
 
     def turn_finished(self, thread: Thread) -> None:
         if self.active and self._eligible(thread):
             self.push_soon(delay=PUSH_DELAY_S)
             self._working_soon(thread, False)
 
-    def _working_soon(self, thread: Thread, working: bool) -> None:
+    def _working_soon(self, thread: Thread, working: bool, device: str = "") -> None:
         """Presence to the relay once the push it belongs to is through — so the
         conversation exists there and carries the id it ended up with. Off the turn's path,
         never retried, errors at debug."""
@@ -500,9 +577,9 @@ class ConversationSync:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._keep(loop.create_task(self._send_working(thread, working), name="sync-working"))
+        self._keep(loop.create_task(self._send_working(thread, working, device), name="sync-working"))
 
-    async def _send_working(self, thread: Thread, working: bool) -> None:
+    async def _send_working(self, thread: Thread, working: bool, device: str = "") -> None:
         for _ in range(3):  # a push rescheduled under us: wait for the one that replaced it
             push = self._push_task
             if push is None or push.done():
@@ -525,7 +602,7 @@ class ConversationSync:
         self.client.cloud.api_key = self.svc.hub._key()
         try:
             await self.client.working(
-                cid, working, self.svc.hub.device_id, state=state, detail=detail
+                cid, working, device or self.svc.hub.device_id, state=state, detail=detail
             )
         except Exception as exc:  # noqa: BLE001 — presence is a hint, never worth a retry
             logger.debug("sync: working={} not delivered: {}", working, exc)
@@ -586,6 +663,11 @@ class ConversationSync:
                     msg = await asyncio.wait_for(q.get(), timeout=WATCH_POLL_S)
                 except TimeoutError:
                     continue
+                # nanoMuse: this same bus carries the run's own stream frames (text, thinking,
+                # tools). They feed the sender, which batches them up to the relay; the status
+                # frames below feed presence. One subscription, two jobs — a second loop would
+                # double the healing logic and race the first for the same queue.
+                self.streams.on_frame(msg)
                 if msg.get("kind") != "status":
                     continue
                 status = msg.get("status") or {}
@@ -616,6 +698,8 @@ class ConversationSync:
         for c in [c for c, w in self.working.items() if w.get("thread") == thread_id]:
             del self.working[c]
         self._announced.pop(thread_id, None)
+        self._remote_streams.pop(thread_id, None)
+        self.streams.forgot(thread_id)
         # a side chat with side chats off: nothing of it moves any more, its copy elsewhere stays
         if (
             cid
@@ -632,11 +716,15 @@ class ConversationSync:
 
     def on_frame(self, frame: dict[str, Any]) -> None:
         """The hub says another device pushed: pull when our cursor is behind. Or (C9) that
-        a turn started or ended there: the presence map and the web app hear it."""
+        a turn started or ended there: the presence map and the web app hear it. Or
+        (nanoMuse) that it is writing a turn right now: the live text reaches this device too."""
         if str(frame.get("from") or "") == self.svc.hub.device_id:
             return
         if frame.get("type") == "working":
             self._apply_working(frame)
+            return
+        if frame.get("type") == "stream":
+            self._apply_stream(frame)
             return
         if int(frame.get("cursor") or 0) > self.cursor and self.active:
             self.pull_soon()
@@ -681,11 +769,77 @@ class ConversationSync:
         )
 
     def _clear_working(self, cid: str, device: str) -> None:
-        """The reply from that device arrived: its line goes."""
         current = self.working.get(cid)
         if current is None or current.get("device") != device:
             return
         self._apply_working({"cid": cid, "from": device, "working": False, "at": time.time()})
+
+    def _apply_stream(self, frame: dict[str, Any]) -> None:
+        """nanoMuse: another device is writing a turn of a conversation this device shows.
+
+        Same gate as presence (``_apply_working``): the frame's ``from`` is not this device
+        (checked by the caller), the cid maps to a thread here, and that thread is one this
+        device may sync. What comes out is the local bus frame the web app already draws for
+        this device's own runs — ``stream_start`` / ``delta`` / ``reasoning_delta`` /
+        ``stream_end`` — so a run elsewhere renders exactly like a run here. The frame
+        carries the other device's ``round``; the web app buckets by it, so two runs of one
+        conversation do not overwrite each other."""
+        cid = str(frame.get("cid") or "")
+        if not cid:
+            return
+        thread = self.thread_of(cid)
+        if thread is None or not self._eligible(thread):
+            return
+        round_id = str(frame.get("round") or "")
+        device = str(frame.get("from") or "")
+        stream_id = f"{round_id}:{device}" if round_id else f"remote:{device}"
+        seen = self._remote_streams.get(thread.id)
+        if seen != stream_id:
+            self._remote_streams[thread.id] = stream_id
+            self.svc.bus.publish(
+                {"kind": "stream_start", "thread": thread.id, "id": stream_id, "remote": True}
+            )
+        delta = str(frame.get("delta") or "")
+        reasoning = str(frame.get("reasoning") or "")
+        tool = frame.get("tool") if isinstance(frame.get("tool"), dict) else None
+        if delta:
+            self.svc.bus.publish(
+                {
+                    "kind": "delta",
+                    "thread": thread.id,
+                    "id": stream_id,
+                    "text": delta,
+                    "remote": True,
+                }
+            )
+        if reasoning:
+            self.svc.bus.publish(
+                {
+                    "kind": "reasoning_delta",
+                    "thread": thread.id,
+                    "id": stream_id,
+                    "text": reasoning,
+                    "remote": True,
+                }
+            )
+        if tool is not None:
+            self.svc.bus.publish(
+                {
+                    "kind": "tool_delta",
+                    "thread": thread.id,
+                    "id": stream_id,
+                    "name": str(tool.get("name") or ""),
+                    "stage": str(tool.get("stage") or "call"),
+                    "summary": str(tool.get("summary") or ""),
+                    "ok": tool.get("ok"),
+                    "remote": True,
+                }
+            )
+        if frame.get("done"):
+            self.svc.bus.publish(
+                {"kind": "stream_end", "thread": thread.id, "id": stream_id, "remote": True}
+            )
+            self._remote_streams.pop(thread.id, None)
 
     def _keep(self, task: asyncio.Task[Any]) -> None:
         self._tasks.add(task)
@@ -844,7 +998,11 @@ class ConversationSync:
                 if not self._eligible(thread):
                     continue
                 cid = self._cid_for(thread)
-                if self.state["titles"].get(thread.id) != thread.title:
+                owner = self.owner_device(thread)
+                if (
+                    self.state["titles"].get(thread.id) != thread.title
+                    or self.state.get("pushed_owners", {}).get(thread.id, "") != owner
+                ):
                     conversations.append(
                         {
                             "cid": cid,
@@ -852,8 +1010,12 @@ class ConversationSync:
                             "title": thread.title,
                             "created_at": _unix(thread.created_at),
                             "updated_at": _unix(thread.updated_at),
+                            # nanoMuse: who holds this conversation's context (relay 0.32);
+                            # "" until some device has run a turn of it here
+                            "owner_device": owner,
                         }
                     )
+                    self.state.setdefault("pushed_owners", {})[thread.id] = owner
                 for ev, wire in self._unsynced(thread, cid):
                     if len(messages) >= BATCH:
                         break
@@ -999,6 +1161,23 @@ class ConversationSync:
             self.svc.delete_thread(thread.id)
             return
         title = str(row.get("title") or "").strip()
+        # nanoMuse: adopt the owner the relay reports. Every device reads it off a pull, so
+        # a line typed on any of them goes to the same device — the one holding the context.
+        owner = str(row.get("owner_device") or "")
+        owner_name = str(row.get("owner_device_name") or "")
+        if owner:
+            self.state.setdefault("device_owners", {})
+            self.state.setdefault("device_owner_names", {})
+            target = MAIN_THREAD if kind == "main" else (thread.id if thread is not None else "")
+            if target:
+                if (
+                    self.state["device_owners"].get(target) != owner
+                    or self.state["device_owner_names"].get(target) != owner_name
+                ):
+                    self.state["device_owners"][target] = owner
+                    self.state["device_owner_names"][target] = owner_name
+                    self._save()
+                    self.svc.bus.publish({"kind": "owner", "thread": target, "device": owner})
         if kind == "main":
             main = self.svc.threads.get(MAIN_THREAD)
             if main is None:

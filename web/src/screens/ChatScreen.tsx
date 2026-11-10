@@ -12,9 +12,11 @@ import { Markdown, splitBlocks } from "../components/Markdown";
 import { MuseHeader, MuseRoundButton } from "../components/MuseHeader";
 import { MoreMenu } from "../components/TabHeader";
 import { stripNamingFence } from "../fences";
+import { executorOf } from "../device-executor";
 import { localDetail, localLabel, useLocale, useT } from "../i18n";
-import { mentionSuggestions, mentionTarget } from "../mention";
+import { mentionChoices, mentionTarget } from "../mention";
 import { WORKING_TTL_MS } from "../presence";
+import { deviceNameOf, streamForConversation, type DeviceStream } from "../stream-buckets";
 import { useStore, type Stream } from "../store";
 import type { AttachmentInfo, HubDevice, SkillInfo, ThreadMeta, TimelineEvent, UserEvent, WorkingPresence } from "../types";
 import { cx, timeDivider, timeShort } from "../util";
@@ -32,6 +34,9 @@ export function ChatScreen() {
   const events = useMemo(() => loaded ?? [], [loaded]);
   const eventsLoaded = loaded !== undefined;
   const stream = state.streams[activeThread];
+  // a run another device of the account is drawing here right now (contract C7): the same
+  // bubble as a local stream, under a line saying whose it is
+  const remoteStream = streamForConversation(state.deviceStreams, activeThread);
   const thread = threads.find((t) => t.id === activeThread);
   const [activityOpen, setActivityOpen] = useState(false);
   // the browser card being watched (or driven) full-screen
@@ -319,6 +324,20 @@ export function ChatScreen() {
               onOpenFile={openFile}
             />
           )}
+          {/* a run on another device of the account, drawn here as it happens (contract C7):
+              the same bubble, under a quiet line saying whose turn it is */}
+          {!stream && remoteStream && (remoteStream.text || remoteStream.reasoning) && (
+            <>
+              <RemoteStreamLine stream={remoteStream} devices={state.hub?.devices ?? []} />
+              <AssistantBubble
+                text={remoteStream.text}
+                reasoning={remoteStream.reasoning}
+                streaming={!remoteStream.ended}
+                files={files}
+                onOpenFile={openFile}
+              />
+            </>
+          )}
           <LiveReply stream={stream} name={name} />
           {(thread?.busy || status.state !== "idle") && !(stream?.text || stream?.reasoning) && status.state !== "waiting" && (
             <TypingIndicator label={thread?.queued ? t("{n} queued", { n: thread.queued }) : undefined} />
@@ -352,6 +371,7 @@ export function ChatScreen() {
         name={name}
         busy={!!thread?.busy && pendingApprovals === 0}
         waiting={events.some((e) => e.type === "question" && e.status === "pending")}
+        executor={executorOf(thread, state.hub?.devices ?? [], state.hub?.device?.id ?? "")}
         onStop={stopActive}
         onSend={(text, files) =>
           send(activeThread, text, files).catch((e: Error) => {
@@ -539,6 +559,18 @@ function chipKind(name: string): "data" | "other" {
 }
 
 const ACCEPT = "image/*,.pdf,.txt,.md,.csv,.tsv,.json,.log,.html,.xml,.yaml,.yml,.toml,.ics,.vcf,.xlsx,.xls,.docx";
+
+/** The quiet line over a reply another device of the account is writing right now (contract C7). */
+function RemoteStreamLine({ stream, devices }: { stream: DeviceStream; devices: readonly HubDevice[] }) {
+  const t = useT();
+  const device = stream.deviceName || deviceNameOf(stream.device, devices);
+  if (!device) return null;
+  return (
+    <div className="mb-1 flex items-center gap-1 text-[11.5px] font-medium text-muted">
+      <MonitorSmartphone size={11} /> {t("From {device}", { device })}
+    </div>
+  );
+}
 
 function AssistantBubble({
   text,
@@ -758,12 +790,15 @@ export function Composer({
   name,
   busy,
   waiting,
+  executor,
   onSend,
   onStop,
 }: {
   name: string;
   busy: boolean;
   waiting: boolean;
+  /** which terminal this chat's next line runs on, for the empty box's placeholder */
+  executor?: { here: boolean; name: string };
   onSend: (text: string, files: string[]) => Promise<void>;
   onStop?: () => Promise<void>;
 }) {
@@ -895,11 +930,13 @@ export function Composer({
     setText(`/${sk.name} `);
     ref.current?.focus();
   };
-  // "@" at the start names another device of the account: the turn runs there (contract C7 rule 8)
+  // "@" at the start names another device of the account: the turn runs there (contract C7
+  // rule 8). This console itself is offered first, so `@本机` — the way a turn comes back from
+  // a device it was handed to — can be picked rather than remembered (§4.2 rule 3).
   const hubDevices = state.hub?.devices ?? [];
-  const mentions = mentionSuggestions(text, hubDevices);
+  const mentions = mentionChoices(text, hubDevices, t("@This machine"));
   const target = mentions.length === 0 ? mentionTarget(text, hubDevices) : null;
-  const pickDevice = (d: HubDevice) => {
+  const pickDevice = (d: { name: string }) => {
     setText(`@${d.name} `);
     ref.current?.focus();
   };
@@ -957,12 +994,14 @@ export function Composer({
       {mentions.length > 0 && (
         <ul className="mb-2 max-h-72 overflow-y-auto rounded-3xl border border-border/70 bg-surface shadow-lg divide-y divide-border/70" role="listbox" aria-label={t("Devices")}>
           {mentions.map((d) => (
-            <li key={d.id}>
+            <li key={d.self ? "__self__" : d.id}>
               <button type="button" onClick={() => pickDevice(d)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-2/70 active:bg-surface-2">
-                <span className="shrink-0 text-accent">{d.kind === "computer" ? <Monitor size={16} /> : <Smartphone size={16} />}</span>
+                <span className="shrink-0 text-accent">{d.self ? <Monitor size={16} /> : null}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[14px] font-medium">@{d.name}</span>
-                  <span className="block truncate text-[12.5px] text-muted">{d.online ? t("Runs this there and reports back") : t("Offline")}</span>
+                  <span className="block truncate text-[12.5px] text-muted">
+                    {d.self ? t("Runs here, on this device") : d.online ? t("Runs this there and reports back") : t("Offline")}
+                  </span>
                 </span>
               </button>
             </li>
@@ -1054,7 +1093,17 @@ export function Composer({
             }
           }}
           rows={1}
-          placeholder={waiting ? t("Answer {name}…", { name }) : pending.length > 0 ? t("Say what to do with it…") : t("Message")}
+          placeholder={
+            waiting
+              ? t("Answer {name}…", { name })
+              : pending.length > 0
+                ? t("Say what to do with it…")
+                : executor
+                  ? executor.here
+                    ? t("@This machine")
+                    : t("@{device}", { device: executor.name })
+                  : t("Message")
+          }
           aria-label={t("Message")}
           className="flex-1 resize-none bg-transparent px-1 py-2 text-[15px] leading-[1.4] outline-none placeholder:text-muted"
         />

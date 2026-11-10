@@ -73,6 +73,9 @@ class SyncEngine(
     /** This account's, or nobody's yet. */
     private fun SyncConversation.mine(): Boolean = owner == null || owner == account
 
+    // nanoMuse: the relay's owner, but a blank one never clears a real one (executor handoff v2).
+    private fun String.orKeep(existing: String): String = takeIf { it.isNotBlank() } ?: existing
+
     /** The main chat, unless it was synced under another account (then this account has none yet). */
     private suspend fun mainSessionId(): String? =
         chats.mainSessionId()?.takeIf { store.conversation(it)?.mine() != false }
@@ -97,8 +100,60 @@ class SyncEngine(
         if (previous != null) onAccountChanged()
     }
 
+    /**
+     * nanoMuse: re-point a mapping whose local chat is gone at the chat that replaced it.
+     *
+     * A chat's local id can change while a mapping still holds the old one — a reinstall, a
+     * `pm clear`, a rebuilt local store, or the home conversation being re-minted. The mapping
+     * then names a chat nobody can open, and since every reader keys off `sessionId`, the
+     * *real* chat looks like one the relay never named a device for. That is the state a
+     * follow-up from the phone landed in: judged ownerless, so it ran here and answered from
+     * this device's memory a conversation whose context lives on the NAS (executor handoff v2
+     * §4.2 — run on the device that holds the context, not the one that typed).
+     *
+     * Only the home conversation moves: it is the one the drawer shows and the one a handoff
+     * keeps returning to. A side chat keeps its mapping, and a stray one is harmless now that
+     * [owners] filters by live chats. Nothing is done when the home is already mapped, or when
+     * the candidate mapping's chat still exists (that would steal a live chat).
+     *
+     * The mapping is *moved*, not dropped — the relay still holds the history and the owner,
+     * and that is what the live chat needs. Returns true when it moved, so the caller can push.
+     */
+    suspend fun reconcileOrphanMain(): Boolean {
+        // The home pointer can itself be stale: `MainChat.persisted` keeps naming a chat that is
+        // gone, and `mainSessionId()` answers null for it. Resolve instead of reading — that asks
+        // the same question the home screen asks, so a repair lands on the chat a person actually
+        // sees. Cleanup of the pointer is MainChat's job; this only needs the id it resolves to.
+        val mainId = chats.mainSessionId() ?: resolveMainId() ?: return false
+        if (store.conversation(mainId) != null) return false // the home is mapped; nothing to repair
+        val live = chats.sessions().mapTo(mutableSetOf()) { it.id }
+        val orphan = store.conversations().firstOrNull {
+            it.kind == "main" && it.owner == account && !it.deleted && it.sessionId !in live
+        } ?: return false
+        // move the row (its session id is the primary key, so this is a delete + insert)
+        val moved = orphan.copy(sessionId = mainId, pushedTitle = null, pushed = false)
+        store.removeConversation(orphan.sessionId)
+        store.putConversation(moved)
+        // messages keep their own ids and mids; only their session key follows the mapping, so
+        // the history the relay already holds is shown under the chat that now owns it
+        if (store.messages(mainId).isEmpty()) {
+            store.putMessages(store.messages(orphan.sessionId).map { it.copy(sessionId = mainId, pushed = false) })
+        }
+        return true
+    }
+
     /** A sign-in: the account-scoped state is this account's before anything else runs (C10), the switch on or off. */
     suspend fun accountSignedIn() = ensureAccount()
+
+    /**
+     * nanoMuse: the chat the home would show, when the stored pointer names one that is gone.
+     * `MainChat.resolve` answers the same question for the UI, but it lives on the app's side
+     * (a `Context` and a repository), and this runs inside the engine. Same rule, read from the
+     * chats the engine already has: the newest chat of this account — the one `resolve` would
+     * also settle on once it finds the pointer stale. Null when there is not one.
+     */
+    private suspend fun resolveMainId(): String? =
+        chats.sessions().maxByOrNull { it.updatedAt }?.id
 
     // ── push ──────────────────────────────────────────────────────────────
 
@@ -138,6 +193,9 @@ class SyncEngine(
                     pushedTitle = null,
                     pushed = false,
                     owner = account,
+                    // nanoMuse: a chat minted here holds its context here until told otherwise
+                    // (executor handoff v2): the relay takes the first owner it is given.
+                    ownerDevice = deviceId,
                 )
                 store.putConversation(map)
             } else if (map.owner == null) {
@@ -183,7 +241,9 @@ class SyncEngine(
             val titleChanged = map.kind != "main" && map.pushedTitle != s.title
             val touched = msgs.any { it.cid == map.cid }
             if (!map.pushed || titleChanged || touched) {
-                convs += OutConversation(map.cid, map.kind, s.title, s.createdAt / 1000, s.updatedAt / 1000)
+                // nanoMuse: report the owner this phone holds — blank when it has nothing to say,
+                // so the relay keeps whatever it already has (executor handoff v2, relay §A)
+                convs += OutConversation(map.cid, map.kind, s.title, s.createdAt / 1000, s.updatedAt / 1000, ownerDevice = map.ownerDevice)
                 titles[map.cid] = map to s.title
             }
         }
@@ -197,7 +257,7 @@ class SyncEngine(
                 continue
             }
             if (!map.deleted) store.putConversation(map.copy(deleted = true))
-            convs += OutConversation(map.cid, map.kind, map.pushedTitle, now() / 1000, now() / 1000, deleted = true)
+            convs += OutConversation(map.cid, map.kind, map.pushedTitle, now() / 1000, now() / 1000, deleted = true, ownerDevice = map.ownerDevice)
         }
 
         if (convs.isEmpty() && msgs.isEmpty()) return 0
@@ -327,7 +387,17 @@ class SyncEngine(
                 touched += s.id
                 renamed = true
             }
-            if (c.title != known.pushedTitle) store.putConversation(known.copy(pushedTitle = c.title))
+            // nanoMuse: the relay's owner for this chat (executor handoff v2) — a turn ran
+            // somewhere else since the last pull, so whose turn the next sentence is may have
+            // changed. Kept with the chat, apart from the title the push compares. A blank owner
+            // never clears a real one, the same rule the relay itself keeps: an older relay, or
+            // one that has not heard from the owner's device yet, must not take the owner away.
+            val owner = c.ownerDevice.takeIf { it.isNotBlank() } ?: known.ownerDevice
+            val ownerName = c.ownerDeviceName.takeIf { it.isNotBlank() } ?: known.ownerDeviceName
+            val ownerChanged = owner != known.ownerDevice || ownerName != known.ownerDeviceName
+            if (c.title != known.pushedTitle || ownerChanged) {
+                store.putConversation(known.copy(pushedTitle = c.title, ownerDevice = owner, ownerDeviceName = ownerName))
+            }
             return renamed
         }
         if (c.kind == "main") {
@@ -338,22 +408,24 @@ class SyncEngine(
                 val mine = store.conversation(mainId)
                 if (mine == null) {
                     // first sight of the account's main chat: ours is it from now on
-                    store.putConversation(SyncConversation(mainId, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account))
+                    store.putConversation(SyncConversation(mainId, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account, ownerDevice = c.ownerDevice, ownerDeviceName = c.ownerDeviceName))
                 } else if (mine.cid != c.cid) {
                     // the relay's main is not the one we minted: move under it, post ours again
                     rehome(mine, c.cid, c.device, c.deviceName)
-                    store.putConversation(store.conversation(mainId)!!.copy(pushedTitle = c.title))
+                    // nanoMuse: the relay's owner, but never a blank one over a real owner (handoff v2)
+                    val existing = store.conversation(mainId)!!
+                    store.putConversation(existing.copy(pushedTitle = c.title, ownerDevice = c.ownerDevice.orKeep(existing.ownerDevice), ownerDeviceName = c.ownerDeviceName.orKeep(existing.ownerDeviceName)))
                 }
                 touched += mainId
                 return true
             }
             val id = chats.createSession(c.title, c.createdAt * 1000, c.updatedAt * 1000, main = true)
-            store.putConversation(SyncConversation(id, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account))
+            store.putConversation(SyncConversation(id, c.cid, "main", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account, ownerDevice = c.ownerDevice, ownerDeviceName = c.ownerDeviceName))
             touched += id
             return true
         }
         val id = chats.createSession(c.title, c.createdAt * 1000, c.updatedAt * 1000, main = false)
-        store.putConversation(SyncConversation(id, c.cid, "side", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account))
+        store.putConversation(SyncConversation(id, c.cid, "side", c.device, c.deviceName, pushedTitle = c.title, pushed = true, owner = account, ownerDevice = c.ownerDevice, ownerDeviceName = c.ownerDeviceName))
         touched += id
         return true
     }
@@ -455,6 +527,44 @@ class SyncEngine(
     /** The local chats synced under another account — on the phone, not in this account's list (C10). */
     suspend fun hidden(): Set<String> = hidden(store, account)
 
+    /** nanoMuse: local chat id → the device holding its context (executor handoff v2), for the placeholder. */
+    suspend fun owners(): Map<String, DeviceOwner.Device> =
+        owners(store, account, liveSessions = chats.sessions().mapTo(mutableSetOf()) { it.id })
+
+    /**
+     * nanoMuse: this phone ran a turn in local chat [sessionId], so the mapping's owner becomes this
+     * device (executor handoff v2 §4.1). [deviceName] is what this device is called, kept so the
+     * owners list reads right before the relay echoes the name back. Returns true when anything
+     * changed — the caller pushes so the other devices hear it. A chat with no mapping, or one
+     * owned here already, is left alone; a mapping under another account is not this account's to
+     * change (C10).
+     */
+    suspend fun claim(sessionId: String, deviceName: String = ""): Boolean {
+        val map = store.conversation(sessionId) ?: return false
+        if (!map.mine() || map.ownerDevice == deviceId) return false
+        store.putConversation(map.copy(ownerDevice = deviceId, ownerDeviceName = deviceName, pushed = false))
+        return true
+    }
+
+    /**
+     * nanoMuse: a `@<device>` line handed this chat's context to [deviceId] (executor handoff v2
+     * §4.1). Written here, and pushed, for the same reason [claim] is: the relay's own report only
+     * lands on the next pull, and until then the stored row is what every reader consults — the
+     * composer's placeholder among them. Changing only the in-memory map (which is what this did
+     * first) left the row naming the old device, so the next pull read it back and the placeholder
+     * snapped to the previous owner: "the `@` did not stick", exactly as reported.
+     *
+     * A mapping under another account is not this account's to change (C10), and one that already
+     * names [deviceId] has nothing to do. Returns true when anything changed, so the caller pushes.
+     */
+    suspend fun yield(sessionId: String, deviceId: String, deviceName: String = ""): Boolean {
+        if (deviceId.isEmpty()) return false
+        val map = store.conversation(sessionId) ?: return false
+        if (!map.mine() || map.ownerDevice == deviceId) return false
+        store.putConversation(map.copy(ownerDevice = deviceId, ownerDeviceName = deviceName, pushed = false))
+        return true
+    }
+
     companion object {
         /** The session ids whose mapping belongs to an account other than [account] (C10); nothing while signed out ([account] null). */
         suspend fun hidden(store: SyncStore, account: String?): Set<String> {
@@ -480,6 +590,35 @@ class SyncEngine(
             return store.pulledMessages()
                 .filter { it.device.isNotBlank() && it.device != deviceId && it.deviceName.isNotBlank() && it.sessionId !in hidden }
                 .associate { it.messageId to it.deviceName }
+        }
+
+        /**
+         * nanoMuse: local chat id → the device holding its context (executor handoff v2), from the
+         * stored mappings. A chat whose owner the relay never named is left out, so the caller
+         * falls back to this phone; chats under another account (C10) are left out too.
+         *
+         * [liveSessions], when given, drops mappings whose chat no longer exists. Long-lived
+         * phones carry those: a chat is recreated (a reinstall, a `pm clear`, a rebuilt local
+         * store) and the sync row still names the id the old one had. Handing that id out is
+         * harmless on its own, but the *real* chat's id, which the row has not caught up with,
+         * is then missing from the map — and a follow-up to a chat synced from the NAS gets
+         * judged ownerless and runs on this phone, answering from its own memory a conversation
+         * it never held (§4.2: run on the device that holds the context).
+         *
+         * Passing the ids is the caller's job because only it can list the local chats; a null
+         * list keeps the old behaviour (used by callers that have no such list at hand).
+         */
+        suspend fun owners(
+            store: SyncStore,
+            account: String?,
+            liveSessions: Set<String>? = null,
+        ): Map<String, DeviceOwner.Device> {
+            val hidden = hidden(store, account)
+            return store.conversations()
+                .filter { it.sessionId !in hidden }
+                .filter { liveSessions == null || it.sessionId in liveSessions }
+                .mapNotNull { c -> DeviceOwner.of(c)?.let { c.sessionId to it } }
+                .toMap()
         }
 
         /** The relay keeps 16 KB; sending more only to have it cut gains nothing. */

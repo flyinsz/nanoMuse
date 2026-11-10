@@ -111,6 +111,9 @@ class HubClient(
     private val onSync: (JSONObject) -> Unit = {},
     /** a turn started or ended on another device: `{"type": "working", "cid", "from", "device_name", "working", "at"}` (contract C9) */
     private val onWorking: (JSONObject) -> Unit = {},
+    // nanoMuse: one batch of a turn running on another device: `{"type": "stream", "cid", "from",
+    // "device_name", "round", "seq", "delta"?, "reasoning"?, "tool"?, "done"}` (executor handoff v2 §C)
+    private val onStream: (JSONObject) -> Unit = {},
     /** an event with no call behind it (relay 0.31): a computer's own approval card, or the word that it was answered */
     private val onPush: (JSONObject) -> Unit = {},
 ) {
@@ -265,6 +268,7 @@ class HubClient(
             "profile" -> runCatching { onProfile(frame) }
             "sync" -> runCatching { onSync(frame) }
             "working" -> runCatching { onWorking(frame) }
+            "stream" -> runCatching { onStream(frame) } // nanoMuse: another device's run, live
             "call" -> {
                 val call = IncomingCall(
                     id = frame.optString("id"),

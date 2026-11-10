@@ -100,6 +100,16 @@ object ConversationSync {
     /** Local chat id → the device working on it right now (C9), while its `at` is under ten minutes old. */
     val working: StateFlow<Map<String, WorkingPresence>> = _working.asStateFlow()
 
+    // nanoMuse: the executor handoff v2 — the owner the relay reports for each local chat, and the
+    // live runs of other devices, keyed by round. Read from the pull and from `stream` frames.
+    private val _owners = MutableStateFlow<Map<String, DeviceOwner.Device>>(emptyMap())
+    /** Local chat id → the device holding that chat's context (`owner_device`), for the placeholder. */
+    val owners: StateFlow<Map<String, DeviceOwner.Device>> = _owners.asStateFlow()
+
+    private val _streams = MutableStateFlow<Map<String, Map<String, Streams.Bucket>>>(emptyMap())
+    /** Local chat id → its rounds in flight, keyed by `round`, for the drawing (`Streams.live`). */
+    val streams: StateFlow<Map<String, Map<String, Streams.Bucket>>> = _streams.asStateFlow()
+
     private val _hidden = MutableStateFlow<Set<String>>(emptySet())
     /**
      * Local chat ids that are not the signed-in account's: synced under another account
@@ -129,6 +139,9 @@ object ConversationSync {
                     Lifecycle.Event.ON_START -> {
                         syncSoon(ctx)
                         startTicker(ctx)
+                        // nanoMuse: the chat store is up by the first foreground, so the orphan
+                        // repair (which needs it) runs here rather than at onCreate
+                        scope.launch { repairOrphansWhenReady(ctx) }
                     }
                     Lifecycle.Event.ON_STOP -> {
                         ticker?.cancel()
@@ -140,15 +153,41 @@ object ConversationSync {
             },
         )
         scope.launch {
-            lock.withLock {
-                runCatching {
-                    val store = RoomSyncStore(ctx)
-                    val account = accountKey(ctx)
-                    _hidden.value = SyncEngine.hidden(store, account) + AccountData.reconcile(ctx)
-                    _captions.value = SyncEngine.captions(store, Hub.deviceId(ctx), account)
-                    _remoteRows.value = SyncEngine.remoteRows(store, Hub.deviceId(ctx), account)
-                }
-            }
+            lock.withLock { repairAndReadMaps(ctx) }
+        }
+    }
+
+    /**
+     * nanoMuse: the repair is the one piece of the init pass that needs the chat store, and at
+     * `onCreate` the app's repository may not be built yet ([engine] returns null until it is).
+     * So it also runs on the first foreground, where everything is up. Idempotent: once the
+     * mapping has moved, [SyncEngine.reconcileOrphanMain] finds the home already mapped and
+     * does nothing.
+     */
+    private suspend fun repairOrphansWhenReady(ctx: Context) {
+        runCatching { engine(ctx)?.reconcileOrphanMain() }
+    }
+
+    /**
+     * nanoMuse: the shared state every reader keys off — hidden chats, captions, remote rows and
+     * the owner map — re-read from the store. Repairs a mapping whose chat has gone (see
+     * [SyncEngine.reconcileOrphanMain]) *before* reading, so the maps it produces name the chats
+     * that actually exist. Without the repair a re-minted chat has no owner entry at all, and a
+     * follow-up to a chat synced from the NAS is judged ownerless and runs here (§4.2).
+     */
+    private suspend fun repairAndReadMaps(ctx: Context) {
+        runCatching {
+            val store = RoomSyncStore(ctx)
+            val account = accountKey(ctx)
+            // repair first: a mapping whose local chat is gone points nowhere, and every map
+            // below keys off `sessionId`, so it would name a chat that cannot be opened. Needs
+            // the full engine (it reads the chats), so it quietly no-ops when signed out.
+            runCatching { engine(ctx)?.reconcileOrphanMain() }
+            _hidden.value = SyncEngine.hidden(store, account) + AccountData.reconcile(ctx)
+            _captions.value = SyncEngine.captions(store, Hub.deviceId(ctx), account)
+            _remoteRows.value = SyncEngine.remoteRows(store, Hub.deviceId(ctx), account)
+            // nanoMuse: who holds each chat's context, for the composer's placeholder
+            _owners.value = SyncEngine.owners(store, account)
         }
     }
 
@@ -183,6 +222,9 @@ object ConversationSync {
         stopSteps()
         _captions.value = emptyMap()
         _remoteRows.value = emptyMap()
+        // nanoMuse: another account's chats are not drawn, and neither are their owners or runs
+        _owners.value = emptyMap()
+        _streams.value = emptyMap()
         // the hub's device list went with Hub.restart() at sign-in; the cursor and the home
         // conversation are the engine's (SyncEngine.ensureAccount)
     }
@@ -224,6 +266,12 @@ object ConversationSync {
         pushJob?.cancel()
         scope.launch {
             run(ctx) {
+                // nanoMuse: this phone is running the turn, so it holds the chat's context from
+                // now on (executor handoff v2 §4.1: the owner is the device that ran the last
+                // turn) — what makes `@本机` stick. Claimed before the push so the new owner rides
+                // the same request. Every local turn comes through here; a turn another device
+                // runs never does (it arrives as pulled rows), so this cannot steal their owner.
+                if (sessionId != null) runCatching { it.claim(sessionId, Hub.name(ctx)) }
                 it.push()
                 if (sessionId != null && runCatching { it.working(sessionId, true) }.getOrDefault(false)) {
                     workingSent += sessionId
@@ -312,6 +360,11 @@ object ConversationSync {
         if (!active(ctx)) return
         scope.launch {
             run(ctx) {
+                // nanoMuse: the repair runs here as well as at init, because this is the first
+                // point the engine is guaranteed to exist (it needs the built chat repository,
+                // which onCreate can beat). Idempotent: once the mapping has moved, the home is
+                // mapped and [SyncEngine.reconcileOrphanMain] does nothing.
+                runCatching { it.reconcileOrphanMain() }
                 applyPull(it.pull())
                 it.push()
                 runCatching { seedPresence(it, it.state().working) }
@@ -350,6 +403,100 @@ object ConversationSync {
                 }
             }
         }
+    }
+
+    /**
+     * nanoMuse: the local chat that holds the relay's conversation [cid], or null when this
+     * device has no mapping for it (executor handoff v2 §4.2).
+     *
+     * A handed-off line arrives over the hub naming the conversation by cid — that is all the
+     * asker knows — so the receiving device resolves it here before running the turn. Resolving
+     * is the whole point: the turn must run on the chat whose context lives on this device, not
+     * on a fresh "From <device>" one. Suspending and off the main thread; the caller is a hub
+     * callback that already blocks on the run.
+     */
+    suspend fun sessionOf(cid: String): String? {
+        val ctx = app ?: return null
+        if (cid.isBlank()) return null
+        return runCatching {
+            RoomSyncStore(ctx).conversationByCid(cid)?.takeIf { it.sessionId !in _hidden.value }?.sessionId
+        }.getOrNull()
+    }
+
+    /**
+     * The hub's `{"type": "stream", "cid", "from", "device_name", "round", "seq", "delta"?,
+     * "reasoning"?, "tool"?, "done"}` (executor handoff v2 §C): one batch of a turn running on
+     * another device. Mapped to the local chat and folded into that chat's rounds by `round`, so
+     * two turns of one chat cannot overwrite each other. A frame that is not one to draw — an
+     * older relay's shape, or nothing in it — is dropped by [StreamBatch.read].
+     */
+    fun onStreamFrame(context: Context, frame: JSONObject) {
+        val ctx = context.applicationContext
+        val batch = StreamBatch.read(frame) ?: return
+        if (batch.from == Hub.deviceId(ctx)) return // the relay does not echo the sender; a stale frame might
+        scope.launch {
+            val sessionId = runCatching { RoomSyncStore(ctx).conversationByCid(batch.cid)?.sessionId }.getOrNull() ?: return@launch
+            if (sessionId in _hidden.value) return@launch // C10: another account's chat is not on this screen
+            _streams.update { all ->
+                val forChat = all[sessionId].orEmpty()
+                val merged = Streams.merge(forChat, batch)
+                if (merged == forChat) all else all + (sessionId to merged)
+            }
+        }
+    }
+
+    /**
+     * nanoMuse: this phone just ran a turn in [sessionId], so it holds the context from now on
+     * (executor handoff v2 §4.1: the owner is the device that ran the last turn). This is what
+     * makes the `@本机` switch stick — without it a chat the NAS owned would go back to the NAS on
+     * the next line. The owner is written locally and pushed; a chat the relay never mapped, or one
+     * already owned by this phone, is left alone. Best effort, like the other push triggers.
+     */
+    fun claim(sessionId: String) {
+        val ctx = app ?: return
+        if (!active(ctx)) return
+        if (_owners.value[sessionId]?.id == Hub.deviceId(ctx)) return // already ours
+        val name = Hub.name(ctx)
+        // the placeholder and the next route should not wait for the round trip
+        _owners.update { it + (sessionId to DeviceOwner.Device(Hub.deviceId(ctx), name)) }
+        scope.launch { run(ctx) { if (it.claim(sessionId, name)) it.push() } }
+    }
+
+    /**
+     * [claim], waited for. A hub task calls this so the owner reaches the relay before the task
+     * answers: the asker's bubble and every other device's placeholder then name this device,
+     * rather than the one that held the chat before this turn ran here. Best effort like [claim];
+     * a failure leaves the mapping as it was.
+     */
+    suspend fun claimNow(sessionId: String) {
+        val ctx = app ?: return
+        if (!active(ctx)) return
+        val name = Hub.name(ctx)
+        if (_owners.value[sessionId]?.id != Hub.deviceId(ctx)) {
+            _owners.update { it + (sessionId to DeviceOwner.Device(Hub.deviceId(ctx), name)) }
+        }
+        runCatching { run(ctx) { if (it.claim(sessionId, name)) it.push() } }
+    }
+
+    /**
+     * nanoMuse: a line was handed to [deviceId] (a `@<device>` send), so that device holds the
+     * context from now on (executor handoff v2 §4.1). Recorded here, the moment the task goes,
+     * for the same reason [claim] is: the composer must show `@<that device>` and the next line
+     * — with no `@` — must go there too. Waiting for the relay to report the new owner would
+     * leave one pull cycle (up to a minute) in which the next line ran here instead, which is
+     * exactly the "the `@` did not stick" the person saw. The relay's own report still lands on
+     * the next pull and is authoritative if it disagrees; this only fills the gap before it.
+     */
+    fun yield(sessionId: String, deviceId: String, deviceName: String) {
+        val ctx = app ?: return
+        if (!active(ctx)) return
+        if (deviceId.isEmpty()) return
+        if (_owners.value[sessionId]?.id == deviceId) return // already theirs
+        // the placeholder and the next route should not wait for the round trip
+        _owners.update { it + (sessionId to DeviceOwner.Device(deviceId, deviceName)) }
+        // and the stored mapping moves with it, then goes out — otherwise the next pull reads the
+        // relay's older owner back over this and the composer snaps to the previous device
+        scope.launch { run(ctx) { if (it.yield(sessionId, deviceId, deviceName)) it.push() } }
     }
 
     /** `GET /v1/sync/state` lists who is working: what the hub said while this phone was away. */
@@ -407,6 +554,9 @@ object ConversationSync {
         _captions.value = emptyMap()
         _remoteRows.value = emptyMap()
         _working.value = emptyMap()
+        // nanoMuse: the owners and the runs belonged to the account that signed out (handoff v2)
+        _owners.value = emptyMap()
+        _streams.value = emptyMap()
         workingSent.clear()
         stopSteps()
         scope.launch { lock.withLock { reconcileOwners(ctx) } }
@@ -522,6 +672,26 @@ object ConversationSync {
                 _captions.value = e.captions()
                 _remoteRows.value = e.remoteRows()
             }
+            // nanoMuse: the owner may have moved on another device; the placeholder follows
+            runCatching { _owners.value = e.owners() }
+        }
+    }
+
+    /**
+     * nanoMuse: re-read who owns each chat, right now, from the database — the synchronous
+     * counterpart of the refresh that rides a pull. A send asks this first: the owner may have
+     * moved on another device (a line typed there while this screen was open), and the local
+     * copy only catches up on the pull cycle. Judging the route from a stale owner is exactly
+     * how a follow-up meant for the NAS ran here instead, with this phone's memory answering a
+     * conversation it never held. Cheap (one query) and best effort — a failure leaves the
+     * previous map in place, which is what the send would have used anyway.
+     */
+    suspend fun refreshOwnersNow() {
+        val ctx = app ?: return
+        if (!active(ctx)) return
+        runCatching {
+            val store = RoomSyncStore(ctx)
+            _owners.value = SyncEngine.owners(store, accountKey(ctx))
         }
     }
 

@@ -1268,4 +1268,9 @@
     <string name="nm_chat_background_purple">Violet</string>
     <string name="nm_chat_in_progress">Sarcină în desfășurare</string>
     <string name="nm_mcp_oauth_token_failed">Autentificarea la conector a eșuat (%1$s). Verifică conexiunea și setările OAuth, apoi încearcă din nou.</string>
+
+    <!-- Executor: the composer's placeholder names the device that will run the next turn. -->
+    <string name="nm_executor_self">\@Acest dispozitiv</string>
+    <string name="nm_executor_here_row">Acest dispozitiv</string>
+    <string name="nm_executor_device">\@%1$s</string>
 </resources>

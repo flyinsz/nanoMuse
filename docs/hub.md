@@ -245,6 +245,7 @@ the key in `hello` instead).
 ← profile  {rev, device}       the account's name, look or connectors changed (PUT /v1/me/profile); fetch it
 ← sync     {what:"conversations", cursor, from}   another device pushed or deleted synced conversations; pull /v1/sync/changes
 ← working  {cid, from, device_name, working, at, state?, detail?}  another device started (true) or finished (false) a turn in that synced conversation; on a true, since relay 0.31, what it is doing (`state`: working | waiting; `detail`: the step, up to 160 characters)
+← stream   {cid, from, device_name, round, seq, delta?, reasoning?, tool?, done}  a turn running on another device, as it happens: a batch of the text it is writing, its reasoning, or the tool it just called, on the conversation `cid`. Batched (a few a second, never one per token) and never replayed — a device that was away gets the final text over sync. `round` is that run's id, so two runs of one conversation do not overwrite each other on screen; `done` closes it. A client that does not know the frame ignores it
 ```
 
 Close codes: `4000` hello expected (no hello within 15 s, or a frame that is
@@ -378,9 +379,25 @@ card for the person), and `detail` is the step's own words, at most 160
 characters, so the line reads *kwai is working: opening the booking site* or
 *kwai is waiting for you*. A device that posts without the two fields is shown
 as plain working; a client that does not know them ignores them. The relay
-keeps these in memory only. By
+keeps these in memory only. Since relay 0.32 the same road carries the run
+itself: a device running a turn posts `/v1/sync/stream` with batches of what it
+is writing and thinking and the tools it calls, and the account's other sockets
+draw the same turn as it happens, exactly as they draw their own. Each frame
+carries the conversation (`cid`), the running device, and that run's `round`, so
+two runs of one conversation do not overwrite each other; the text is batched (a
+few frames a second, not one per token) and never stored — a device that was
+away gets the final text over sync as before.
+
+The **owner** of a conversation is the device that ran its last turn — the one
+whose own file holds the full context, since sync carries plain text only. Every
+device reads it off the conversation row (`owner_device`, `owner_device_name`,
+[cloud.md](cloud.md#conversation-sync)) and, by default, sends its next line
+*there* rather than running it itself; a leading `@<device>` hands it elsewhere,
+and `@本机` (or the device's own name) takes it back. So a chat synced in from
+another device keeps running on that device, with the memory it already has. By
 default only the main conversation is synced; side chats travel only from and to
-devices that turned *Also sync side chats* on. Nothing else is synchronised:
+devices that turned *Also sync side chats* on, and the owner rule holds for them
+the same way. Nothing else is synchronised:
 keys, providers and settings stay where they were entered, and files and images
 stay on the device that made them. How the apps use it is in
 [every-device.md](every-device.md#the-same-conversations-everywhere).

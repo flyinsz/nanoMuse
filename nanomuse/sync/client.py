@@ -63,6 +63,13 @@ class SyncClient:
             {"device": device, "conversations": conversations, "messages": messages},
         )
 
+    async def stream(self, body: dict[str, Any]) -> None:
+        """One batch of a turn under way here, for the account's other devices (relay 0.32):
+        ``{cid, device, round, seq, delta?, reasoning?, tool?, done?}``. Batched — a couple of
+        frames a second, not one per token. Fire and forget: a hint to the other screens,
+        never a retry-worthy write (the final text still goes up over ``push``). 204."""
+        await self.cloud._request("POST", "/v1/sync/stream", body)
+
     async def delete_conversation(self, cid: str) -> dict[str, Any]:
         """Tombstone one chat for every device; the relay drops its texts at once."""
         return await self.cloud._request("DELETE", f"/v1/sync/conversations/{cid}")

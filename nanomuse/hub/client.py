@@ -339,9 +339,10 @@ class HubClient:
                     self.on_profile(frame)
                 except Exception:  # noqa: BLE001
                     logger.exception("hub on_profile")
-        elif kind in ("sync", "working"):
+        elif kind in ("sync", "working", "stream"):
             # another device pushed conversations (contract C7): the engine pulls; or a turn
-            # started or ended there (C9 `working`): the engine notes who is working
+            # started or ended there (C9 `working`); or it is telling us what it is writing,
+            # thinking and calling right now (nanoMuse `stream`): the engine notes all three
             if self.on_sync is not None:
                 try:
                     self.on_sync(frame)

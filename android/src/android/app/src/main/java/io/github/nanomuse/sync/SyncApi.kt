@@ -76,6 +76,9 @@ object SyncJson {
                     updatedAt = it.optLong("updated_at"),
                     deleted = it.optBoolean("deleted", false),
                     seq = it.optLong("seq"),
+                    // nanoMuse: the owner the relay reports (executor handoff v2, relay §B)
+                    ownerDevice = it.optString("owner_device"),
+                    ownerDeviceName = it.optString("owner_device_name"),
                 )
             }.filter { it.cid.isNotBlank() },
             messages = (0 until msgs.length()).mapNotNull { msgs.optJSONObject(it) }.map {
@@ -115,6 +118,9 @@ object SyncJson {
                     .put("title", c.title ?: JSONObject.NULL)
                     .put("created_at", c.createdAt)
                     .put("updated_at", c.updatedAt)
+                    // nanoMuse: the owner only when this phone has one to report — the relay
+                    // keeps a real owner when the field is absent (executor handoff v2, relay §A)
+                    .apply { if (c.ownerDevice.isNotBlank()) put("owner_device", c.ownerDevice) }
                     .apply { if (c.deleted) put("deleted", true) },
             )
         }

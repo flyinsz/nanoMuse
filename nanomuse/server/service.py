@@ -61,7 +61,7 @@ from nanomuse.server.outbox import Delivery, DeliveryOutbox
 from nanomuse.server.providers import ChatGPTSignIn, Providers
 from nanomuse.server.push import PushService
 from nanomuse.server.webui import WebUI, current_thread
-from nanomuse.sync import ConversationSync, parse_mention, system_note
+from nanomuse.sync import ConversationSync, Where
 from nanomuse.telemetry import telemetry
 from nanomuse.tools.browser import Browser
 from nanomuse.tools.coding_tool import CodingAgents
@@ -337,6 +337,18 @@ class Thread:
     device_name: str = ""
     # a chat another device opened here with a `task` over the hub: who asked
     remote_from: dict[str, Any] | None = None
+    # nanoMuse: this turn was handed here by another device (it holds the conversation and
+    # ran a turn of it elsewhere). Distinct from `remote_from`, which marks a chat that
+    # *belongs* to another device and is therefore not synced; a handed-off run still syncs.
+    handoff_from: dict[str, Any] | None = None
+    # nanoMuse: the device holding this conversation's context — the one the next plain line
+    # runs on (executor handoff v2 §4.1). Kept here, on the thread, so `meta()` can hand it to
+    # every client without reaching into the sync engine; the engine writes it through
+    # `SyncEngine.mark_owner`, which is the one place that decides whose turn it is next. The
+    # web console reads `owner_device` off the thread row to name the composer's target — with
+    # it never set, the console could only ever say "this device", whatever the relay knew.
+    owner_device: str = ""
+    owner_device_name: str = ""
     # a chat that came in through conversation sync (contract C7): the device that started
     # it, for the "From Pixel 8" badge; "" for chats started here
     origin_device: str = ""
@@ -360,6 +372,15 @@ class Thread:
             meta["device_name"] = self.device_name
         if self.remote_from:
             meta["remote_from"] = self.remote_from
+        if self.handoff_from:
+            meta["handoff_from"] = self.handoff_from
+        # nanoMuse: who runs the next line here (executor handoff v2 §4.1). Carried on the thread
+        # row so every client can name the composer's target; written by `mark_owner` (the one
+        # place that decides whose turn is next) and restored from `index.json` at startup, so a
+        # runtime that restarted still answers with the owner the relay gave it.
+        if self.owner_device:
+            meta["owner_device"] = self.owner_device
+            meta["owner_device_name"] = self.owner_device_name
         if self.origin_device:
             meta["origin_device"] = self.origin_device
             meta["origin_device_name"] = self.origin_device_name
@@ -817,6 +838,13 @@ class MuseService:
                 thread.origin_device_name = str(m.get("origin_device_name") or "")
             if m.get("main_of"):
                 thread.main_of = str(m["main_of"])
+            # nanoMuse: the conversation's owner comes back with the thread (executor handoff v2).
+            # The sync engine is the authority and overwrites this on its next pull; reading it
+            # here is what lets `meta()` name the executor before any turn of this session runs,
+            # which is exactly the state a console reloads into.
+            if m.get("owner_device"):
+                thread.owner_device = str(m["owner_device"])
+                thread.owner_device_name = str(m.get("owner_device_name") or "")
         self._save_index()
 
     def _save_index(self) -> None:
@@ -838,6 +866,12 @@ class MuseService:
                 m["origin_device_name"] = t.origin_device_name
             if t.main_of:
                 m["main_of"] = t.main_of
+            # nanoMuse: the conversation's owner outlives the process (executor handoff v2). It
+            # belongs beside the rest of the thread's own state — the sync engine's copy is the
+            # authority, but this is what `meta()` serves before the first turn of a session.
+            if t.owner_device:
+                m["owner_device"] = t.owner_device
+                m["owner_device_name"] = t.owner_device_name
             metas.append(m)
         (self.threads_dir / "index.json").write_text(
             json.dumps(metas, ensure_ascii=False, indent=1), "utf-8"
@@ -1164,6 +1198,7 @@ class MuseService:
         language: str = "",
         via: str = "",
         delivery: str = "",
+        mid: str = "",
     ) -> dict[str, Any]:
         """Queue a message for a thread. Returns the timeline event that was created.
 
@@ -1172,7 +1207,12 @@ class MuseService:
         screens when the client said; the agent answers in it (see MuseAgent.run).
         ``via="cloud"`` is *Use nanoMuse Cloud this time*: this one turn runs on the
         account's recommended chat model (see :meth:`cloud_once`); the next is back on
-        the configured model. A CloudError when that is not possible."""
+        the configured model. A CloudError when that is not possible.
+
+        nanoMuse: ``mid`` is the message id the *asking* device already minted for this line.
+        A handed-off turn reuses it so the relay keeps one row for one sentence (the asker
+        pushed it, and the owner would otherwise push it again under a second id). Empty for
+        a turn that began here, which mints its own as before."""
         text = text.strip()
         language = language.strip()
         attachments = [self.attachment(path) for path in files or []]
@@ -1196,6 +1236,13 @@ class MuseService:
             return event
         if source in ("user", "device"):
             event_data: dict[str, Any] = {"type": "user", "text": text, "thread": thread_id}
+            if source in ("user", "device"):
+                # nanoMuse: every line written here carries a row id from the start. It is
+                # what a handoff passes on so the owner writes this row instead of minting a
+                # second one (see `handoff_to`), and what the push keys on. Minting it here
+                # means a line no caller identified still has one to travel with.
+                mid = mid or str(uuid.uuid4())
+                event_data["mid"] = mid
             if attachments:
                 event_data["files"] = [a.model_dump() for a in attachments]
             if once is not None:
@@ -1205,21 +1252,60 @@ class MuseService:
                 # asked by another device over the hub; shown as a bubble with its name
                 event_data["via"] = label
                 thread.purposes[text] = f"asked from {label}" if label else "asked from a device"
-            note = ""
-            if source == "user" and text.startswith("@"):
-                # "@Pixel 8 open the calendar": the work is for that device (contract C7, rule
-                # 8). The bubble shows the text without the mention and whom it is for; the
-                # agent gets one system note in front and hands the task over with `delegate`.
-                mention = parse_mention(text, self.hub.others(), self.hub.device_id)
-                if mention is not None and (mention.text or attachments):
-                    text = mention.text
-                    event_data["text"] = text
-                    event_data["to_device"] = mention.device_id
-                    event_data["to_device_name"] = mention.device_name
-                    note = system_note(mention.device_name, mention.device_id)
+                if mid and thread.handoff_from:
+                    # nanoMuse: a handed-off line is not this device's own — the asker
+                    # pushed it already (C8). Marking it keeps the push from sending the
+                    # same question a second time under a fresh id; the row is still drawn
+                    # here, under the name of the device it was asked from.
+                    event_data["synced"] = True
+                    event_data["via_device"] = str(thread.handoff_from.get("device") or "")
+                    event_data["via_device_name"] = str(thread.handoff_from.get("name") or "")
+            # nanoMuse: a line written here goes to the conversation's owner — the device
+            # that holds its whole context — unless it starts with a mention, which decides
+            # on its own (`@<device>` hands it there, `@本机` takes it back). The owner and
+            # the bubble follow the same rule, which is how a chat synced over from another
+            # device keeps running on that device without anyone typing a prefix.
+            if source == "user" and not thread.device:
+                route = self.sync.route_line(thread, text)
+                if route.where is Where.UNROUTABLE:
+                    raise ValueError(f"{route.device_name or '该设备'} 离线，未发送")
+                text = route.text
+                event_data["text"] = text
+                if route.where is Where.HANDOFF and not attachments:
+                    # that device runs it on the conversation it already holds; the words
+                    # reach the relay now, so every device shows the bubble at once.
+                    # `to_device` names the target only when it is not this device — a line
+                    # that runs here (the owner *is* this machine) has nobody to announce,
+                    # and "to <this device>" over your own bubble reads as a mistake.
+                    event = self.ui.emit(
+                        {
+                            **event_data,
+                            "to_device": route.device_id,
+                            "to_device_name": route.device_name,
+                        }
+                        if route.device_id != self.hub.device_id
+                        else event_data
+                    )
+                    self.sync.mark_owner(thread, route.device_id, route.device_name)
+                    # the line's own row id travels with it, so the owner writes that row
+                    # rather than minting one — one row on the relay, not two
+                    self.hub.handoff_to(
+                        thread, route.text, route.device_id, route.device_name,
+                        mid=str(event_data.get("mid") or ""),
+                    )
+                    # nanoMuse: the line goes up like any other (C8). Without this a handed-off
+                    # question reached the far device but never the account — the others saw the
+                    # reply (the far device pushes its own turn) and not what was asked. The
+                    # `working` presence names the *target*, not this machine: the turn runs
+                    # there, and saying otherwise draws "this device is working" everywhere
+                    # while it only waits for a reply it did not start. The far device sends
+                    # its own working too (its own run); this one is the head start so every
+                    # watcher shows the wait from the moment the words arrive.
+                    self.sync.message_sent(thread, working_device=route.device_id)
+                    return event
+                # a line that runs here makes this device the owner: it holds the context now
+                self.sync.mark_owner(thread, self.hub.device_id, self.hub.device_name)
             event = self.ui.emit(event_data)
-            if note:
-                text = f"[{note}]\n\n{text}" if text else f"[{note}]"
             self.bus.publish({"kind": "thread", "thread": thread.meta()})
             # the person's words reach the account's other devices now (C8), not after the turn
             self.sync.message_sent(thread)

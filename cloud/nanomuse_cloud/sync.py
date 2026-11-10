@@ -106,6 +106,48 @@ def clean_attachments(value: object) -> list[dict]:
     return out
 
 
+def clean_stream_frame(body: object) -> dict | None:
+    """One `stream` batch from a device, as the hub forwards it (0.32). None when there is
+    nothing to draw: no cid, no round, and every payload empty. At least one of `delta`,
+    `reasoning` or `tool` must say something (a bare `done` counts). Text is capped like a
+    presence `detail`: this is a screen hint, not data — the final text comes over sync."""
+    if not isinstance(body, dict):
+        return None
+    cid = valid_id(body.get("cid"))
+    round_id = str(body.get("round") or "")[:64]
+    if cid is None or not round_id:
+        return None
+    out: dict = {"cid": cid, "round": round_id, "from": str(body.get("device") or "")[:80]}
+    try:
+        out["seq"] = max(0, int(body.get("seq") or 0))
+    except (TypeError, ValueError):
+        out["seq"] = 0
+    delta = str(body.get("delta") or "")[:4096]
+    reasoning = str(body.get("reasoning") or "")[:4096]
+    tool = body.get("tool")
+    clean_tool: dict | None = None
+    if isinstance(tool, dict):
+        name = str(tool.get("name") or "")[:120]
+        stage = str(tool.get("stage") or "")[:20]
+        if name or stage:
+            clean_tool = {"name": name, "stage": stage}
+            if isinstance(tool.get("summary"), str):
+                clean_tool["summary"] = str(tool["summary"])[:DETAIL_CAP]
+            if "ok" in tool:
+                clean_tool["ok"] = bool(tool["ok"])
+    done = bool(body.get("done"))
+    if not delta and not reasoning and clean_tool is None and not done:
+        return None
+    if delta:
+        out["delta"] = delta
+    if reasoning:
+        out["reasoning"] = reasoning
+    if clean_tool is not None:
+        out["tool"] = clean_tool
+    out["done"] = done
+    return out
+
+
 def _ts(value: object, default: int, ceiling: int | None = None) -> int:
     """A Unix time in seconds from what a device sent: milliseconds are divided down, anything
     unreadable, non-positive or more than a week past `ceiling` (the relay's clock; `default`
@@ -122,12 +164,16 @@ def _ts(value: object, default: int, ceiling: int | None = None) -> int:
 
 
 def _conversation_row(r: sqlite3.Row, names: dict[str, str]) -> dict:
+    keys = r.keys()
+    owner = str(r["owner_device"] or "") if "owner_device" in keys else ""
     return {
         "cid": r["cid"],
         "kind": r["kind"],
         "title": r["title"],
         "device": r["device"],
         "device_name": names.get(r["device"], ""),
+        "owner_device": owner,
+        "owner_device_name": names.get(owner, ""),
         "created_at": int(r["created_at"]),
         "updated_at": int(r["updated_at"]),
         "deleted": bool(r["deleted"]),
@@ -398,6 +444,24 @@ class SyncStore:
             name = self._device_names(c, account_id).get(device, "")
         return self.presence.set(account_id, cid_ok, device, name, bool(working), state=state, detail=detail)
 
+    def stream(self, account_id: str, body: object) -> dict:
+        """`POST /v1/sync/stream`: one batch of a run on another device, on its way to the
+        account's other sockets (0.32). The relay only checks that the conversation exists
+        and shapes the frame; nothing is stored (a device that was away gets the final text
+        over sync). Returns the frame the hub fans out."""
+        frame = clean_stream_frame(body)
+        if frame is None:
+            raise CloudError(400, "bad_request", "A stream frame needs a cid, a round and something to draw")
+        with self.db.tx() as c:
+            if not self._enabled(c, account_id):
+                raise CloudError(409, "sync_off", "Conversation sync is off for this account")
+            row = c.execute("SELECT deleted FROM sync_conversations WHERE account_id=? AND cid=?", (account_id, frame["cid"])).fetchone()
+            if row is None or row["deleted"]:
+                raise CloudError(404, "no_conversation", "No synced conversation with that id")
+            name = self._device_names(c, account_id).get(frame["from"], "")
+        frame["device_name"] = name
+        return frame
+
     @staticmethod
     def _live_conversations(c: sqlite3.Connection, account_id: str) -> int:
         return int(
@@ -450,6 +514,11 @@ class SyncStore:
                 # renamed, since its `updated_at` fell back to `created_at` and lost
                 updated_at = max(created_at, _ts(conv.get("updated_at"), created_at, ceiling=t))
                 deleted = bool(conv.get("deleted"))
+                # 0.32: the device that last ran a turn of this conversation. The pusher
+                # knows it (it either ran the turn or was told so by the one that did), so
+                # it rides the conversation row like `title`; "" when the pusher has nothing
+                # to say, and then whatever the relay holds stands.
+                owner = str(conv.get("owner_device") or "")[:80]
                 row = c.execute("SELECT * FROM sync_conversations WHERE account_id=? AND cid=?", (account_id, cid)).fetchone()
                 if row is None:
                     if kind == "side" and not deleted and self._live_conversations(c, account_id) >= LIMITS["conversations"]:
@@ -469,8 +538,8 @@ class SyncStore:
                             continue
                     seq = self._next_seq(c, account_id)
                     c.execute(
-                        "INSERT INTO sync_conversations(account_id, cid, kind, title, device, created_at, updated_at, deleted, deleted_at, seq) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO sync_conversations(account_id, cid, kind, title, device, created_at, updated_at, deleted, deleted_at, seq, owner_device) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             account_id,
                             cid,
@@ -482,6 +551,7 @@ class SyncStore:
                             1 if deleted else 0,
                             t if deleted else None,
                             seq,
+                            "" if deleted else owner,
                         ),
                     )
                     accepted += 1
@@ -491,11 +561,13 @@ class SyncStore:
                 if deleted:
                     self._tombstone(c, account_id, cid, t)
                     accepted += 1
-                elif updated_at >= int(row["updated_at"]) and (title != row["title"] or updated_at != int(row["updated_at"])):
+                elif updated_at >= int(row["updated_at"]) and (
+                    title != row["title"] or updated_at != int(row["updated_at"]) or owner != str(row["owner_device"] or "")
+                ):
                     seq = self._next_seq(c, account_id)
                     c.execute(
-                        "UPDATE sync_conversations SET title=?, updated_at=?, seq=? WHERE account_id=? AND cid=?",
-                        (title, updated_at, seq, account_id, cid),
+                        "UPDATE sync_conversations SET title=?, owner_device=?, updated_at=?, seq=? WHERE account_id=? AND cid=?",
+                        (title, owner or str(row["owner_device"] or ""), updated_at, seq, account_id, cid),
                     )
                     accepted += 1
             touched_cids: set[str] = set()

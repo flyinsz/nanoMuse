@@ -1264,4 +1264,9 @@
     <string name="nm_chat_background_purple">Morado</string>
     <string name="nm_chat_in_progress">Tarea en curso</string>
     <string name="nm_mcp_oauth_token_failed">No se pudo iniciar sesión en el conector (%1$s). Revisa la conexión y la configuración de OAuth e inténtalo de nuevo.</string>
+
+    <!-- Executor: the composer's placeholder names the device that will run the next turn. -->
+    <string name="nm_executor_self">\@Este dispositivo</string>
+    <string name="nm_executor_here_row">Este dispositivo</string>
+    <string name="nm_executor_device">\@%1$s</string>
 </resources>

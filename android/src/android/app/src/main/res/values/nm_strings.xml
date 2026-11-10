@@ -1244,4 +1244,9 @@
     <string name="nm_chat_background_purple">Purple</string>
     <string name="nm_chat_in_progress">Task in progress</string>
     <string name="nm_mcp_oauth_token_failed">Connector sign-in failed (%1$s). Check the connection and OAuth settings, then try again.</string>
+
+    <!-- Executor: the composer's placeholder names the device that will run the next turn. -->
+    <string name="nm_executor_self">\@This device</string>
+    <string name="nm_executor_here_row">This device</string>
+    <string name="nm_executor_device">\@%1$s</string>
 </resources>

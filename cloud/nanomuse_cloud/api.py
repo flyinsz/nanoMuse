@@ -26,6 +26,7 @@
     GET  /v1/sync/changes     ?since=&limit=&scope=&tail=       → conversations and messages after a cursor, in seq order (0.20: scope=all|main, tail=K with since=0)
     POST /v1/sync/changes     {device, conversations, messages} → {cursor, accepted, rejected}; the other devices hear a hub `sync` frame
     POST /v1/sync/working     {cid, working, device?, state?, detail?} → 0.20: 204; the other devices hear a hub `working` frame (presence, kept 10 min in memory; 0.31: state and step ride along)
+    POST /v1/sync/stream      {cid, device?, round, seq, delta?, reasoning?, tool?, done?} → 0.32: 204; the other devices hear a hub `stream` frame (a run as it happens, batched; nothing stored)
     DELETE /v1/sync/changes                                     → the store emptied, the switch kept
     DELETE /v1/sync/conversations/{cid}                         → one chat tombstoned everywhere
     POST /v1/auth/sign-out                                      → 204 (revokes this key)
@@ -1131,6 +1132,24 @@ def create_app(
         hub = getattr(app.state, "hub", None)
         if hub is not None:
             await hub.notify_working(caller.account_id, frame)
+        return Response(status_code=204)
+
+    @app.post("/v1/sync/stream", status_code=204)
+    async def sync_stream(request: Request, caller: Caller = Depends(sync_dep)) -> Response:
+        """0.32: {cid, device?, round, seq, delta?, reasoning?, tool?, done?} — one batch of a
+        run under way on the calling device, for the account's other sockets, which draw the
+        same turn as it happens (not just the final text). Batched by the sender (a couple
+        of frames a second, not one per token); nothing is stored, so a device that was away
+        simply gets the final text over sync. The frame's `device` falls back to
+        `X-Nanomuse-Device` as `push` carries it."""
+        body = await _json(request)
+        if not isinstance(body, dict):
+            raise CloudError(400, "bad_request", "Send a JSON object")
+        body.setdefault("device", request.headers.get("x-nanomuse-device", ""))
+        frame = sync_store.stream(caller.account_id, body)
+        hub = getattr(app.state, "hub", None)
+        if hub is not None:
+            await hub.notify_stream(caller.account_id, frame)
         return Response(status_code=204)
 
     @app.post("/v1/sync/changes")

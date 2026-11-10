@@ -5406,7 +5406,7 @@ fun ChatScreen(
                                         )
                                         .verticalScrollbar(mentionListState),
                                 ) {
-                                    itemsIndexed(mentionEntries, key = { _, e -> e.nmDevice?.let { "device:${it.id}" } ?: e.linuxPath }) { i, entry ->
+                                    itemsIndexed(mentionEntries, key = { _, e -> when { e.nmSelf -> "self"; e.nmDevice != null -> "device:${e.nmDevice!!.id}"; else -> e.linuxPath } }) { i, entry ->
                                         val isSelected = i == mentionSelectedIndex
                                         Row(
                                             modifier = Modifier
@@ -5440,8 +5440,14 @@ fun ChatScreen(
                                             // we keep it uniform here so the row stays
                                             // visually consistent at small sizes on Pixel 4a.
                                             Icon(
-                                                // nanoMuse: distinguish equipment from file entries.
-                                                imageVector = entry.nmDevice?.let { if (it.isPhone) Icons.Default.Smartphone else Icons.Default.Computer } ?: Icons.Default.Description,
+                                                // nanoMuse: distinguish equipment from file entries. This phone's
+                                                // own row reads as the phone it is, so `@本机` looks like the
+                                                // device list rather than a file.
+                                                imageVector = when {
+                                                    entry.nmSelf -> Icons.Default.Smartphone
+                                                    entry.nmDevice != null -> if (entry.nmDevice!!.isPhone) Icons.Default.Smartphone else Icons.Default.Computer
+                                                    else -> Icons.Default.Description
+                                                },
                                                 contentDescription = null,
                                                 tint = ChatColors.secondaryText,
                                                 modifier = Modifier.size(16.dp),
@@ -5449,7 +5455,11 @@ fun ChatScreen(
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    text = entry.nmDevice?.name ?: entry.basename, // nanoMuse
+                                                    text = when {
+                                                        entry.nmSelf -> entry.linuxPath
+                                                        entry.nmDevice != null -> entry.nmDevice!!.name
+                                                        else -> entry.basename
+                                                    }, // nanoMuse
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.Medium,
                                                     color = ChatColors.primaryText,
@@ -5457,7 +5467,11 @@ fun ChatScreen(
                                                     overflow = TextOverflow.Ellipsis,
                                                 )
                                                 Text(
-                                                    text = entry.nmDevice?.let { listOf(it.os, stringResource(R.string.nm_profile_online), it.id).filter(String::isNotBlank).joinToString(" · ") } ?: entry.displayPath, // nanoMuse
+                                                    text = when {
+                                                        entry.nmSelf -> stringResource(R.string.nm_executor_here_row)
+                                                        entry.nmDevice != null -> listOf(entry.nmDevice!!.os, stringResource(R.string.nm_profile_online), entry.nmDevice!!.id).filter(String::isNotBlank).joinToString(" · ")
+                                                        else -> entry.displayPath
+                                                    }, // nanoMuse
                                                     fontSize = 11.sp,
                                                     color = ChatColors.secondaryText,
                                                     maxLines = 1,
@@ -6311,9 +6325,17 @@ fun ChatScreen(
                                             animationSpec = tween(durationMillis = fadeMs),
                                             label = "composerPlaceholder",
                                         ) { idx ->
+                                            // nanoMuse: a synced chat's line names its executor — the device
+                                            // the next sentence runs on (§4.2) — and holds it whatever the
+                                            // rotation index, because that is state, not a hint. Empty while
+                                            // signed out or unsynced, and upstream's own line (the pill's
+                                            // "Message", or the rotating hints) stands exactly as it was.
+                                            val nmExecutor = io.github.nanomuse.sync.rememberExecutorPlaceholder(
+                                                viewModel.activeSessionId,
+                                            )
                                             Text(
                                                 if (nmChoosingName) stringResource(R.string.nm_naming_placeholder)
-                                                // nanoMuse: Muse's pill says just "Message".
+                                                else if (nmExecutor.isNotEmpty()) nmExecutor
                                                 else if (nmPill) stringResource(R.string.nm_composer_placeholder)
                                                 else composerPlaceholderText(idx, soulName.name),
                                                 color = if (nmPill) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)

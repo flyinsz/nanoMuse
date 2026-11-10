@@ -26,6 +26,10 @@ From the hub:
     {"type":"pong"}
     {"type":"sync","what":"conversations","cursor","from"}  another device pushed chats; pull (0.19)
     {"type":"working","cid","from","device_name","working","at"}  a turn started or ended there (0.20)
+    {"type":"stream","cid","from","round","seq","delta"?,"reasoning"?,"tool"?,"done"}  a run
+        on another device, as it happens (0.32): what the model is writing, what it is
+        thinking and which tool it just called. Batched, never replayed; the final text
+        still comes over sync.
 
 `key` in hello is for browsers, which cannot set an Authorization header. A
 `web` device is a front door only: it can call, it cannot be called. Devices of
@@ -95,7 +99,7 @@ APPROVE_ANY = "approve.any"
 PUSHES_PER_MINUTE = 30
 PUSH_BODY_BYTES = 16 * 1024
 # what this relay understands beyond the frames every version has; `welcome.server.features`
-FEATURES = ["event_push"]
+FEATURES = ["event_push", "stream_sync"]
 
 
 class Bucket:
@@ -342,6 +346,19 @@ class Hub:
             return
         frame = {"type": "working", **body}
         await asyncio.gather(*(c.send(frame) for c in conns))
+
+    async def notify_stream(self, account_id: str, frame: dict) -> None:
+        """0.32: a device ran a turn of a synced conversation and is telling the account what
+        it is writing, thinking and calling, as it happens; every *other* connected device
+        hears it and draws the same run (see the `stream` frame above). Batched by the
+        sender: `frame` carries one batch, not one token. Never back to the sender, which
+        drew it while it ran. Forwarded as-is rather than remembered: a device that was
+        away for a stream simply gets the final text over sync, which is the floor."""
+        conns = [c for c in self.online.get(account_id, {}).values() if c.device_id != str(frame.get("from") or "")]
+        if not conns:
+            return
+        out = {"type": "stream", **frame}
+        await asyncio.gather(*(c.send(out) for c in conns))
 
     def forget(self, account_id: str, device_id: str) -> None:
         if device_id in self.online.get(account_id, {}):

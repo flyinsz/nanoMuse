@@ -77,6 +77,10 @@ class FileMentionIndex(
         val isDirectory: Boolean,
         // nanoMuse: device rows reuse the picker's selection and keyboard path.
         val nmDevice: io.github.nanomuse.hub.Device? = null,
+        // nanoMuse: this phone's own row in the @ menu (executor handoff v2 §7.2). It has no
+        // hub entry — the hub does not list the device that is asking — so it is marked here
+        // rather than carried as a [nmDevice].
+        val nmSelf: Boolean = false,
     ) {
         val basename: String get() = linuxPath.substringAfterLast('/').ifEmpty { linuxPath }
         val displayPath: String get() = linuxPath.removePrefix("/var/minis/")

@@ -1272,4 +1272,9 @@
     <string name="nm_chat_background_purple">Fioletowe</string>
     <string name="nm_chat_in_progress">Zadanie w toku</string>
     <string name="nm_mcp_oauth_token_failed">Logowanie do łącznika nie powiodło się (%1$s). Sprawdź połączenie i ustawienia OAuth, a następnie spróbuj ponownie.</string>
+
+    <!-- Executor: the composer's placeholder names the device that will run the next turn. -->
+    <string name="nm_executor_self">\@To urządzenie</string>
+    <string name="nm_executor_here_row">To urządzenie</string>
+    <string name="nm_executor_device">\@%1$s</string>
 </resources>

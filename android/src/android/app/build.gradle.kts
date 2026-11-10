@@ -54,11 +54,22 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.nanomuse.app"
+        // nanoMuse: a handoff build can sit beside the installed app. `-Pnm.appId=…` renames
+        // the package (and, since every authority, permission and sandbox socket is spelled
+        // `${applicationId}…`, its whole private namespace with it), so both apps install,
+        // run and keep their own data side by side. Absent, the id is the shipped one and
+        // every ordinary command behaves exactly as before.
+        applicationId = (project.findProperty("nm.appId") as String?) ?: "io.github.nanomuse.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 52
-        versionName = "1.0.9"
+        versionName = (project.findProperty("nm.versionName") as String?) ?: "1.0.9"
+        // `-Pnm.appName=…` gives the handoff build its own label, so two nanoMuse icons on the
+        // home screen are told apart. Registered only when asked: the shipped build keeps
+        // `app_name` from strings.xml untouched (an upstream file).
+        (project.findProperty("nm.appName") as String?)?.let { tint ->
+            resValue("string", "app_name", tint)
+        }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -554,6 +554,7 @@ PUT    /v1/sync/state   {enabled}       → the same; false deletes everything s
 GET    /v1/sync/changes ?since=0&limit=500&scope=all|main&tail=K   → {cursor, more, conversations[], messages[], skipped?}
 POST   /v1/sync/changes {device, conversations[], messages[]}   → {cursor, accepted, rejected[{cid | mid, reason, cid_main?}]}
 POST   /v1/sync/working {cid, working, device?, state?, detail?}   → 204; the hub tells the other devices (0.31: state and step ride along)   404 no_conversation
+POST   /v1/sync/stream  {cid, device?, round, seq, delta?, reasoning?, tool?, done?}   → 204; the hub tells the other devices a run as it happens (0.32, batched, nothing stored)   404 no_conversation
 DELETE /v1/sync/changes                 → the state, counts at zero     everything stored, switch unchanged
 DELETE /v1/sync/conversations/{cid}     → {cursor, deleted: true}      a tombstone the other devices apply; 404 no_conversation
 ```
@@ -578,7 +579,18 @@ to the account's other sockets ([hub.md](hub.md#frames)). Since 0.31 a
 `working: true` may also say `state` (`working` | `waiting`) and `detail` —
 the run's current step in the model's own words, capped at 160 characters —
 and the frame and the state's `working` rows carry both, so the other devices
-see the run move between its start and its end. Request bodies over
+see the run move between its start and its end. Since relay 0.32
+`POST /v1/sync/stream` carries the run itself: a device posts `{cid, device,
+round, seq, delta?, reasoning?, tool?, done?}` for the turn it is running — a
+batch of the text it is writing, its reasoning, or a tool it called (`{name,
+stage: call | result, summary?, ok?}`) — and the account's other sockets get a
+`stream` frame ([hub.md](hub.md#frames)) and draw the same run as it happens.
+`round` is the run's own id, so two runs of one conversation do not overwrite
+each other; `done: true` closes it. A frame with no `cid`, no `round`, or nothing
+to draw is 400 `bad_request`; an unknown or deleted conversation is 404
+`no_conversation`; sync off is 409 `sync_off`. Frames are batched by the sender
+(a few a second, not one per token) and **never stored** — a device that was away
+for a run still gets its final text over `POST /v1/sync/changes`. Request bodies over
 `MAX_REQUEST_BYTES` (16 MiB by default since 0.20) are 413 `too_large` with
 *Request body is N MB; this relay accepts up to M MB*.
 
@@ -590,10 +602,15 @@ conversation mapping before upload, so a lost response followed by a restart als
 keeps the same conversation ID.
 
 A conversation is `{cid, kind: main | side, title, device, device_name,
-created_at, updated_at, deleted, seq}` and a message `{mid, cid, seq, device,
+owner_device, owner_device_name, created_at, updated_at, deleted, seq}` and a message `{mid, cid, seq, device,
 device_name, role: user | assistant, text, truncated, attachments[{name, mime,
 size}], created_at, deleted}`; `cid` and `mid` are opaque IDs the device makes (4–64
 characters of `a-z 0-9 . _ : -`, folded to lower case), times are Unix seconds.
+`owner_device` (relay 0.32) is the device that ran the conversation's last turn —
+the one whose own file holds the full context — and `owner_device_name` its
+display name; a device reads it off a pull and sends its next line there by
+default. It is `""` until some device has run a turn of the conversation, and a
+push that names no owner leaves the one the relay holds.
 Every accepted change takes the account's next `seq`; a device keeps the
 highest `cursor` it has pulled and asks for `since=` that. A push is idempotent
 (a known `mid` is left alone unless the new row is a tombstone, a known `cid`

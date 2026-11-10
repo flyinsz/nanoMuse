@@ -136,7 +136,7 @@ class MemoryChats : LocalChats {
  * `sync_off` as 409.
  */
 class FakeRelay(private val names: Map<String, String> = emptyMap()) : SyncApi {
-    class Conv(val cid: String, val kind: String, var title: String?, val device: String, val createdAt: Long, var updatedAt: Long, var deleted: Boolean, var seq: Long)
+    class Conv(val cid: String, val kind: String, var title: String?, val device: String, val createdAt: Long, var updatedAt: Long, var deleted: Boolean, var seq: Long, var ownerDevice: String = "")
     class Msg(val mid: String, val cid: String, val device: String, val role: String, var text: String, val attachments: List<Attachment>, val createdAt: Long, var deleted: Boolean, var seq: Long)
 
     var enabled = true
@@ -205,7 +205,8 @@ class FakeRelay(private val names: Map<String, String> = emptyMap()) : SyncApi {
         )
     }
 
-    private fun Conv.remote() = RemoteConversation(cid, kind, title, device, names[device] ?: device, createdAt, updatedAt, deleted, seq)
+    // nanoMuse: the relay reports the owner and its display name (executor handoff v2, relay §B)
+    private fun Conv.remote() = RemoteConversation(cid, kind, title, device, names[device] ?: device, createdAt, updatedAt, deleted, seq, ownerDevice, names[ownerDevice] ?: "")
     private fun Msg.remote() = RemoteMessage(mid, cid, seq, device, role, text, text.length > 16_384, attachments, createdAt, deleted, names[device] ?: "")
 
     override fun working(device: String, cid: String, working: Boolean) {
@@ -237,10 +238,12 @@ class FakeRelay(private val names: Map<String, String> = emptyMap()) : SyncApi {
                         continue
                     }
                 }
-                convs[c.cid] = Conv(c.cid, c.kind, c.title, device, c.createdAt, c.updatedAt, c.deleted, ++seq)
+                convs[c.cid] = Conv(c.cid, c.kind, c.title, device, c.createdAt, c.updatedAt, c.deleted, ++seq, c.ownerDevice)
                 accepted++
             } else if (c.updatedAt >= known.updatedAt || c.deleted) {
                 known.title = c.title; known.updatedAt = c.updatedAt; known.deleted = known.deleted || c.deleted; known.seq = ++seq
+                // nanoMuse: a blank owner never clears a real one, as the relay's own rule goes
+                if (c.ownerDevice.isNotBlank()) known.ownerDevice = c.ownerDevice
                 accepted++
             }
         }

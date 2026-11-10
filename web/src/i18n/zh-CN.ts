@@ -250,6 +250,8 @@ const zhCN: Record<string, string> = {
   Stop: "停止",
   "Nothing to stop": "没有正在进行的任务",
   Message: "发消息",
+  "@This machine": "@本机",
+  "@{device}": "@{device}",
   "An emoji instead": "改用表情符号",
 
   // ── Ideas ─────────────────────────────────────────────────────────────────────────
@@ -1769,6 +1771,7 @@ const zhCN: Record<string, string> = {
   "to {device}": "发给 {device}",
   "This goes to {device}.": "这条会发给 {device}。",
   "Runs this there and reports back": "在那台设备上执行并汇报结果",
+  "Runs here, on this device": "在本机执行",
   Offline: "离线",
 
   // the first conversation (contract C4): the opening in the chat, the chooser

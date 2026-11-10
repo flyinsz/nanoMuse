@@ -43,6 +43,14 @@ data class SyncConversation(
      * Signed in as another account the chat stays on the phone, unseen and unpushed.
      */
     val owner: String? = null,
+    // nanoMuse: the device that holds this conversation's context (executor handoff v2, relay §A)
+    // — the relay's `owner_device`, read back on every pull and written out on a push. This is
+    // not [device] (who started the chat) and not [owner] (which account it belongs to): it is
+    // what decides whose turn the next sentence is. Empty means the relay has not said (an older
+    // relay, or a row that predates the column); the phone then falls back to itself.
+    @ColumnInfo(defaultValue = "") val ownerDevice: String = "",
+    // nanoMuse: the owner's display name as the relay reported it (relay §B); empty when unknown.
+    @ColumnInfo(defaultValue = "") val ownerDeviceName: String = "",
 )
 
 /** A local message row ↔ a `mid`. Rows that are not part of the transcript have no entry. */
@@ -175,7 +183,7 @@ interface SyncDao {
     suspend fun removeMessagesOfAll(ids: List<String>)
 }
 
-@Database(entities = [SyncConversation::class, SyncMessage::class, SyncMeta::class, SessionOwner::class], version = 4, exportSchema = false)
+@Database(entities = [SyncConversation::class, SyncMessage::class, SyncMeta::class, SessionOwner::class], version = 5, exportSchema = false)
 abstract class SyncDatabase : RoomDatabase() {
     abstract fun dao(): SyncDao
 
@@ -210,9 +218,22 @@ abstract class SyncDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * nanoMuse (executor handoff v2, relay §A): the device holding a conversation's context,
+         * as the relay reports it. Existing rows keep '' — the relay may already hold a real
+         * owner for them and the next pull fills it in; assuming this phone would be wrong for a
+         * chat the NAS started.
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_conversations ADD COLUMN ownerDevice TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE sync_conversations ADD COLUMN ownerDeviceName TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun get(context: Context): SyncDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, SyncDatabase::class.java, "nanomuse_sync.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigration()
                 .build()
                 .also { instance = it }

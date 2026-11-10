@@ -4,6 +4,12 @@ All notable changes to nanoMuse. The format follows [Keep a Changelog](https://k
 
 ## [Unreleased]
 
+### Added
+
+- **A chat's next line runs on the device that holds its context.** Every conversation carries an owner — the device that ran its last turn, and so the one whose own file holds the tool traces, reasoning and pictures that sync never carries. A line typed on another device now goes to that owner by default instead of running with an empty history, a leading `@<device>` hands it elsewhere, and `@本机` (or the device's own name) takes it back. The composer's placeholder names the device a line will run on. Side chats follow the same rule.
+
+- **A turn running on another device shows as it happens.** A device running a turn posts batches of what it is writing, its reasoning and the tools it calls, and the account's other online devices draw the same turn the way they draw their own, with no wait for the final answer. Text is batched a few frames a second and never stored; a device that was away still gets the final text over sync.
+
 ### Documentation
 
 - Documented supported migration paths for memories, reference files and connectors, and the limits of importing another assistant's archive. For #870.

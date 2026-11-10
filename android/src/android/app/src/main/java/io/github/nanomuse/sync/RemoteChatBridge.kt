@@ -39,6 +39,25 @@ class RemoteChatBridge(
         fun show(id: String, task: Task)
         suspend fun finish(sessionId: String, id: String, task: Task)
         fun afterTurn()
+        // nanoMuse: the id of the device holding this chat's context, when it is not this phone
+        // (executor handoff v2 §4.2). Null for a chat the relay never named a device for — the
+        // ordinary path, which runs here. Only the id crosses this boundary: the bridge resolves
+        // it against the device list it was handed, so an offline owner falls back to this phone.
+        fun ownerId(): String? = null
+        // nanoMuse: what that owner is called, for the "it is not answering" message (§4.2).
+        fun ownerName(): String? = null
+        // nanoMuse: a line that names this phone (`@本机`, or this device's own name) takes the
+        // context back here (§4.2 rule 3 "`@本机` 必须可用"), so the composer stops offering the
+        // other device. The bridge cannot tell `@本机` from an unknown `@nobody` — both resolve to
+        // no device — so it hands the text over and the host judges, which keeps an unknown `@`
+        // from moving the owner.
+        fun takeOwnerHere(text: String) {}
+        // nanoMuse: a line handed to another device makes *that* device the chat's owner from
+        // now on (§4.1: the owner is the device that ran the last turn). The host records it
+        // the moment the task goes, so the composer shows `@<that device>` at once and the
+        // next line — with no `@` — goes there too, instead of waiting a pull cycle for the
+        // relay to report back and running here in the meantime.
+        fun tookOwnerThere(deviceId: String, deviceName: String) {}
     }
     private class Active(val id: String, val task: Task) { var job: Job? = null }
     private var active: Active? = null
@@ -52,13 +71,39 @@ class RemoteChatBridge(
 
     /** True means addressed here, including a refusal. It must not fall into the local model. */
     fun send(text: String, devices: List<Device>, attachments: Boolean, compacting: Boolean): Boolean {
-        val route = RemoteDeviceRoute.resolve(text, devices)
-        if (route == RemoteDeviceRoute.None) return false
+        var route = RemoteDeviceRoute.resolve(text, devices)
+        // nanoMuse: with no `@` at all, the recent owner runs it (executor handoff v2 §4.2) — the
+        // one behaviour change from upstream, where no mention always meant this phone. Only a
+        // line that addresses nobody takes this path: `@本机` (and any unknown `@`) also resolves
+        // to None, and those the person meant for this phone, so the owner must not take them.
+        if (route == RemoteDeviceRoute.None && !text.trimStart().startsWith("@")) {
+            val ownerId = host.ownerId() ?: return false
+            val known = devices.firstOrNull { it.id == ownerId }
+            // nanoMuse: the owner has gone (offline, or dropped from the account). Running here
+            // would answer with this phone's memory, which never held that chat's context — the
+            // person must be told, not quietly given a different conversation. (§4.2)
+            if (known == null) return refuse(text, Issue.OFFLINE, host.ownerName() ?: ownerId)
+            route = RemoteDeviceRoute.Selected(known, text)
+        }
+        // nanoMuse: still nobody addressed — nobody to hand it to, so this phone runs it (upstream's
+        // own path). Reached by `@本机`/an unknown `@` (meant for this phone) and by a chat with no
+        // owner. It must not fall into the refusal below, which would wrongly error on `@本机`.
+        if (route == RemoteDeviceRoute.None) {
+            // nanoMuse: a line that names this phone takes the context back (§4.2 rule 3), so the
+            // composer stops offering the other device and the next line stays here. The host
+            // judges the text, so an unknown `@nobody` leaves the owner where it was.
+            if (text.trimStart().startsWith("@")) host.takeOwnerHere(text)
+            return false
+        }
         if (route !is RemoteDeviceRoute.Selected) return refuse(text, Issue.AMBIGUOUS)
         if (host.busy || compacting) return refuse(text, Issue.BUSY)
         if (!route.device.online) return refuse(text, Issue.OFFLINE, route.device.name)
         if (attachments) return refuse(text, Issue.ATTACHMENTS)
         if (route.text.isBlank()) { host.restoreDraft(text); return true }
+        // nanoMuse: the context moves to that device as the task goes (§4.1) — recorded before
+        // the run so the placeholder and the next route already say so. A `@<device>` line is
+        // the one way to hand the turn over, so this is the right place for it.
+        host.tookOwnerThere(route.device.id, route.device.name)
         val id = UUID.randomUUID().toString()
         val run = Active(id, newTask(route.device, route.text, id))
         active = run

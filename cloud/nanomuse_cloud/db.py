@@ -188,6 +188,11 @@ CREATE TABLE IF NOT EXISTS sync_conversations (
     deleted       INTEGER NOT NULL DEFAULT 0,
     deleted_at    INTEGER,                    -- tombstones are swept after 30 days
     seq           INTEGER NOT NULL,           -- the account's change counter when last written
+    -- the device that last ran a turn of this conversation (devices.id): the one whose
+    -- local copy holds the whole context (tool traces, reasoning, pictures), so every
+    -- other device hands its next line to it rather than re-asking from nothing. ""
+    -- until some device has run a turn here.
+    owner_device  TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (account_id, cid)
 );
 CREATE INDEX IF NOT EXISTS sync_conversations_seq ON sync_conversations(account_id, seq);
@@ -711,6 +716,11 @@ class Database:
             "CREATE INDEX IF NOT EXISTS turns_figures ON turns(ts, account_id, turn_start, turn_key, media, media_bytes, "
             "source, status, prompt_tokens, completion_tokens, trajectory, conversation, script, platform, run, model)"
         )
+        # 0.32: which device holds a conversation's full context (sync.py): the last one to
+        # run a turn of it. Every other device of the account sends its next line there, so
+        # the model keeps the tool traces and reasoning that live only on that device. Empty
+        # for a conversation no device has run yet, and for every row written before this.
+        add("sync_conversations", "owner_device", "TEXT NOT NULL DEFAULT ''")
 
     # -- 0.15: settings the operator changes while the relay runs ------------------------------
 

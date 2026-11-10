@@ -692,6 +692,125 @@ def test_hub_carries_working_to_the_other_devices(ws_client):
         assert phone.receive_json()["working"] is False
 
 
+# -- 0.32: whose conversation it is, and the run as it happens ----------------------------------
+
+
+async def test_owner_device_round_trips_on_the_conversation_row():
+    """The device that last ran a turn is stored on the conversation row and comes back on a
+    pull, with its name. A pusher that says nothing leaves what the relay holds; a new value
+    takes a new seq, so a device with a cursor sees it."""
+    app, client, sender, up, cloud, settings = make()
+    key = await signed_in(client, sender)
+    account_id = cloud.authenticate(key).account_id
+    cloud.db.upsert_device(account_id, "nas-1", "飞牛深圳", "computer", "Debian", "0.1", "[]")
+    cid = uid()
+    await client.post(
+        "/v1/sync/changes",
+        json={"device": "nas-1", "conversations": [conv(cid, "main", "Main", owner_device="nas-1")], "messages": [msg(uid(), cid)]},
+        headers=auth(key),
+    )
+    row = (await client.get("/v1/sync/changes?since=0", headers=auth(key))).json()["conversations"][0]
+    assert row["owner_device"] == "nas-1" and row["owner_device_name"] == "飞牛深圳"
+    assert row["device"] == "nas-1"  # the creator is untouched
+
+    # a later push that names no owner keeps the one held (an older client's push)
+    await client.post(
+        "/v1/sync/changes",
+        json={"device": "nas-1", "conversations": [conv(cid, "main", "Renamed", updated_at=1738000500)]},
+        headers=auth(key),
+    )
+    row = (await client.get("/v1/sync/changes?since=0", headers=auth(key))).json()["conversations"][0]
+    assert row["title"] == "Renamed" and row["owner_device"] == "nas-1"
+
+    # the phone runs a turn: the owner moves, and that is a change a watching cursor sees
+    cursor = (await client.get("/v1/sync/changes?since=0", headers=auth(key))).json()["cursor"]
+    r = await client.post(
+        "/v1/sync/changes",
+        json={"device": "pixel", "conversations": [conv(cid, "main", "Renamed", updated_at=1738000500, owner_device="pixel")]},
+        headers=auth(key),
+    )
+    assert r.json()["accepted"] == 1
+    page = (await client.get(f"/v1/sync/changes?since={cursor}", headers=auth(key))).json()
+    assert [c["owner_device"] for c in page["conversations"]] == ["pixel"]
+
+    # a relay from before the column: a row read with no owner_device still shapes an answer
+    with cloud.db.tx() as c:
+        c.execute("UPDATE sync_conversations SET owner_device='' WHERE account_id=? AND cid=?", (account_id, cid))
+    row = (await client.get("/v1/sync/changes?since=0", headers=auth(key))).json()["conversations"][0]
+    assert row["owner_device"] == "" and row["owner_device_name"] == ""
+
+
+def test_hub_carries_a_stream_to_the_other_devices(ws_client):
+    """0.32: a batch of a run under way reaches the account's other sockets, and never comes
+    back to the device that sent it. The frame is shaped like the contract: cid, from, round,
+    seq and whatever of delta/reasoning/tool says something."""
+    key = ws_sign_up(ws_client, "13800138000")
+    pc_key = ws_sign_up(ws_client, "13800138000")
+    headers = {"Authorization": f"Bearer {key}"}
+    with connect(ws_client, key) as phone, connect(ws_client, pc_key) as pc:
+        phone.send_json(hello("phone", "phone-1", "Pixel"))
+        phone.receive_json()  # welcome
+        phone.receive_json()  # devices
+        pc.send_json(hello("computer", "pc-1", "desk"))
+        pc.receive_json()  # welcome
+        pc.receive_json()  # devices
+        phone.receive_json()  # devices (pc arrived)
+        cid = uid()
+        ws_client.post("/v1/sync/changes", json={"device": "pc-1", "conversations": [conv(cid, "main")]}, headers=headers)
+        phone.receive_json()  # sync
+        r = ws_client.post(
+            "/v1/sync/stream",
+            json={"cid": cid, "device": "pc-1", "round": "r-1", "seq": 3, "delta": "你好", "tool": {"name": "shell", "stage": "call"}},
+            headers=headers,
+        )
+        assert r.status_code == 204, r.text
+        frame = phone.receive_json()
+        assert frame["type"] == "stream" and frame["cid"] == cid and frame["from"] == "pc-1"
+        assert frame["round"] == "r-1" and frame["seq"] == 3 and frame["delta"] == "你好"
+        assert frame["tool"] == {"name": "shell", "stage": "call"} and frame["device_name"] == "desk"
+        # the sender hears nothing of its own (its next frame is the pong)
+        pc.send_json({"type": "ping"})
+        assert pc.receive_json()["type"] == "pong"
+        # a bare `done` is a frame too
+        ws_client.post("/v1/sync/stream", json={"cid": cid, "device": "pc-1", "round": "r-1", "seq": 9, "done": True}, headers=headers)
+        assert phone.receive_json()["done"] is True
+
+
+async def test_a_stream_frame_is_shaped_and_refused_like_presence():
+    """A frame with no cid, no round, or nothing to draw is a 400; an unknown or deleted
+    conversation is a 404; sync off is a 409; nothing is written."""
+    app, client, sender, up, cloud, settings = make()
+    key = await signed_in(client, sender)
+    main = uid()
+    await client.post("/v1/sync/changes", json={"device": "pixel", "conversations": [conv(main, "main")]}, headers=auth(key))
+    ok = {"cid": main, "device": "pixel", "round": "r-1", "seq": 1, "delta": "hi"}
+    assert (await client.post("/v1/sync/stream", json=ok, headers=auth(key))).status_code == 204
+    assert (await client.post("/v1/sync/stream", json=ok, headers={**auth(key), "X-Nanomuse-Device": "pixel"})).status_code == 204
+    # nothing to draw: no delta, no reasoning, no tool, not done
+    assert (await client.post("/v1/sync/stream", json={**ok, "delta": ""}, headers=auth(key))).status_code == 400
+    assert (await client.post("/v1/sync/stream", json={**ok, "round": ""}, headers=auth(key))).status_code == 400
+    assert (await client.post("/v1/sync/stream", json={**ok, "cid": ""}, headers=auth(key))).status_code == 400
+    assert (await client.post("/v1/sync/stream", json={"round": "r", "delta": "x"}, headers=auth(key))).status_code == 400
+    assert (await client.post("/v1/sync/stream", json={**ok, "cid": uid()}, headers=auth(key))).status_code == 404
+    # a long delta is cut, not refused
+    r = await client.post("/v1/sync/stream", json={**ok, "delta": "x" * 9000}, headers=auth(key))
+    assert r.status_code == 204
+    await client.delete(f"/v1/sync/conversations/{main}", headers=auth(key))
+    assert (await client.post("/v1/sync/stream", json=ok, headers=auth(key))).status_code == 404
+    main2 = uid()
+    await client.post("/v1/sync/changes", json={"device": "pixel", "conversations": [conv(main2, "main")]}, headers=auth(key))
+    await client.put("/v1/sync/state", json={"enabled": False}, headers=auth(key))
+    r = await client.post("/v1/sync/stream", json={**ok, "cid": main2}, headers=auth(key))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "sync_off"
+
+
+def test_the_relay_advertises_stream_sync():
+    """A client decides whether to send stream frames by `welcome.server.features`."""
+    from nanomuse_cloud.hub import FEATURES
+
+    assert "stream_sync" in FEATURES and "event_push" in FEATURES
+
+
 async def test_a_body_over_the_limit_names_both_sizes():
     app, client, sender, up, cloud, settings = make(max_request_bytes=1024)
     key = await signed_in(client, sender)

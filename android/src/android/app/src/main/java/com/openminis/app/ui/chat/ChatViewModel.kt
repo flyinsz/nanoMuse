@@ -528,14 +528,59 @@ class ChatViewModel(
     val visibleMessageCap: StateFlow<Int> = _visibleMessageCap.asStateFlow()
 
     /**
+     * nanoMuse: the tail bubble of a turn running on another device (executor handoff v2 §4.4),
+     * or null when none is live for the open chat. Fed by [ConversationSync.onStreamFrame] via
+     * the relay's `stream` frames, and drawn with the same assistant bubble a local run uses, so
+     * a run elsewhere looks like a run here (§4.4: the two are drawn the same way).
+     *
+     * Not persisted and never merged into [_messages]: the relay's stream is a screen hint, and
+     * the round's final text still arrives as a synced message, which takes this bubble's place.
+     *
+     * A function, not a property: [uiMessages] is declared above and needs it, and Kotlin will
+     * not let a property be used before its declaration. Nothing is built until a collector
+     * arrives, so the read of the session id happens long after construction.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun nmRemoteStreamFlow(): kotlinx.coroutines.flow.Flow<ChatMessage?> =
+        kotlinx.coroutines.flow.combine(
+            io.github.nanomuse.sync.ConversationSync.streams,
+            nmDisplayedSessionId,
+        ) { byChat, sid ->
+            if (sid.isEmpty()) return@combine null
+            val bucket = byChat[sid]?.let { rounds ->
+                io.github.nanomuse.sync.Streams.live(
+                    rounds,
+                    io.github.nanomuse.hub.Hub.deviceId(context),
+                ).firstOrNull()
+            } ?: return@combine null
+            if (!bucket.drawable) return@combine null
+            ChatMessage(
+                // keyed by the round so Compose keeps one bubble across its batches, and a
+                // second run in the same chat does not take over the first's identity mid-flight
+                id = "nm-remote-${bucket.from}-${bucket.round}",
+                role = "assistant",
+                content = bucket.text,
+                isStreaming = !bucket.done,
+                thinkingLevel = null,
+            )
+        }
+
+    /**
      * Tail-windowed view of [messages] for ChatScreen's LazyColumn. For
      * sessions with `count <= LONG_SESSION_THRESHOLD` or `count <= cap`
      * this returns the EXACT SAME list reference as `_messages.value` —
      * Compose / collectAsState gets identity-equal snapshots, no extra
      * allocation, no behavior change for normal sessions.
      */
-    val uiMessages: StateFlow<List<ChatMessage>> =
-        kotlinx.coroutines.flow.combine(_messages, _visibleMessageCap) { raw, cap ->
+    val uiMessages: StateFlow<List<ChatMessage>> by lazy {
+        kotlinx.coroutines.flow.combine(_messages, _visibleMessageCap, nmRemoteStreamFlow()) { raw, cap, remote ->
+            // nanoMuse: a turn running on another device arrives as `stream` frames (C13) and is
+            // drawn as one more assistant bubble at the tail — the same bubble this phone's own
+            // run uses, `isStreaming` and all, so a run elsewhere reads exactly like a run here.
+            // It is not persisted: the relay's stream is a hint, and the real reply lands by
+            // sync and takes its place. Appended here (not merged into `_messages`) so the tail
+            // window, the identity-equal fast path and every other reader stay untouched.
+            val withRemote = if (remote == null) raw else raw + remote
             // [T-bridge-message-ui-leak-android] Single UI-collection sink for
             // EVERY path that pushes messages to the list (loadSession, live
             // stream append, compact rebuild, snapshot reload, sync refresh…).
@@ -546,7 +591,7 @@ class ChatViewModel(
             // so this is defensive; it guards against a future refactor routing
             // the bridge into _messages. Only allocate a new list when a bridge
             // is actually present, keeping the identity-equal fast path intact.
-            val full = if (raw.any { it.isInternalBridge }) raw.filterNot { it.isInternalBridge } else raw
+            val full = if (withRemote.any { it.isInternalBridge }) withRemote.filterNot { it.isInternalBridge } else withRemote
             if (full.size <= LONG_SESSION_THRESHOLD || full.size <= cap) full
             // [T-android-uimessages-sublist-cme] `.toList()` is defensive
             // hardening, NOT a proven fix for the reported crash. Read the
@@ -591,6 +636,7 @@ class ChatViewModel(
             kotlinx.coroutines.flow.SharingStarted.Eagerly,
             emptyList(),
         )
+    }
 
     /**
      * Whether the current session has older messages above the window.
@@ -1602,13 +1648,16 @@ class ChatViewModel(
     /** Live-filtered candidate list. Combines the index's [FileMentionIndex.entries]
      * with [mentionFilter] so matches refresh as the user types and as the
      * background scan emits more entries. Capped at 50 like iOS. */
-    // nanoMuse: online devices share the file menu, only for a leading mention.
+    // nanoMuse: online devices share the file menu, only for a leading mention. This phone is
+    // added by the menu itself (`nmSelf`), so `@本机` is offered even though the hub never
+    // lists the device that is asking.
     val mentionEntries: StateFlow<List<FileMentionIndex.Entry>> = combine(
         fileMentionIndex.entries, _mentionFilter, _mentionAnchor, _inputText, io.github.nanomuse.hub.Hub.devices,
     ) { _, filter, anchor, text, devices ->
         io.github.nanomuse.sync.DeviceMentionMenu.entries(
             text, anchor, filter, devices.filter { it.id != io.github.nanomuse.hub.Hub.deviceId(context) },
             fileMentionIndex.matches(filter, limit = 50),
+            selfName = context.getString(R.string.nm_executor_self).removePrefix("@"),
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -6343,6 +6392,35 @@ class ChatViewModel(
                 }
             }
             override fun afterTurn() { nmSendNextQueued() }
+            // nanoMuse: a line with no `@` goes to the chat's owner when it is not this phone
+            // (executor handoff v2 §4.2). This phone's own id reads as no owner — the ordinary path.
+            override fun ownerId(): String? {
+                val sid = realSessionId.ifEmpty { sessionId }
+                if (sid.isEmpty()) return null
+                val owned = io.github.nanomuse.sync.ConversationSync.owners.value[sid] ?: return null
+                if (owned.id == io.github.nanomuse.hub.Hub.deviceId(context)) return null
+                return owned.id
+            }
+            override fun ownerName(): String? {
+                val sid = realSessionId.ifEmpty { sessionId }
+                return io.github.nanomuse.sync.ConversationSync.owners.value[sid]?.name
+            }
+            // nanoMuse: `@本机` (or this device's own name) takes the context back here (§4.2 rule 3).
+            // The bridge hands over any leading-`@` line that named no device; only one that
+            // really names this phone moves the owner, so `@nobody` leaves it where it was.
+            override fun takeOwnerHere(text: String) {
+                if (!io.github.nanomuse.sync.DeviceOwner.addressesSelf(text, io.github.nanomuse.hub.Hub.name(context))) return
+                val sid = realSessionId.ifEmpty { sessionId }
+                if (sid.isNotEmpty()) io.github.nanomuse.sync.ConversationSync.claim(sid)
+            }
+            // nanoMuse: `@<device>` moved the chat's context there (§4.1). Recorded now so the
+            // placeholder shows that device and the next line — with no `@` — goes to it too.
+            override fun tookOwnerThere(deviceId: String, deviceName: String) {
+                val sid = realSessionId.ifEmpty { sessionId }
+                if (sid.isNotEmpty()) {
+                    io.github.nanomuse.sync.ConversationSync.yield(sid, deviceId, deviceName)
+                }
+            }
         }
         io.github.nanomuse.sync.RemoteChatBridge(viewModelScope, host) { device, text, id ->
             io.github.nanomuse.sync.RemoteTaskChat(context, device, text, id)
@@ -6722,6 +6800,14 @@ class ChatViewModel(
 
     private fun nmAfterTurn() {
         val sid = realSessionId.ifEmpty { sessionId }
+        // nanoMuse: this phone just ran the turn, so it holds the chat's context from now on
+        // (executor handoff v2 §4.1: the owner is the device that ran the last turn). Recorded
+        // at the end of the turn rather than at send, because only the device that *finished*
+        // the run has the whole context — the tool traces, the reasoning, the pictures. Without
+        // it the relay kept naming whichever device owned the chat before, so every other client
+        // drew the placeholder for a device that had not run it, and the next plain line was
+        // handed to that device instead of this one.
+        if (sid.isNotEmpty()) io.github.nanomuse.sync.ConversationSync.claim(sid)
         // Goal blocks in the reply just finished, and the turn budget of any
         // prompt addendum, are settled first — they apply to every session.
         io.github.nanomuse.chat.SessionAddenda.onTurnFinished(sid)

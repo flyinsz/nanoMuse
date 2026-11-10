@@ -120,6 +120,7 @@ hub 通过 `WS /v1/hub` 传输 JSON 文本帧，使用 `Authorization: Bearer nm
 ← profile  {rev, device}       the account's name, look or connectors changed (PUT /v1/me/profile); fetch it
 ← sync     {what:"conversations", cursor, from}   another device pushed or deleted synced conversations; pull /v1/sync/changes
 ← working  {cid, from, device_name, working, at, state?, detail?}  another device started (true) or finished (false) a turn in that synced conversation; on a true, since relay 0.31, what it is doing (`state`: working | waiting; `detail`: the step, up to 160 characters)
+← stream   {cid, from, device_name, round, seq, delta?, reasoning?, tool?, done}  a turn running on another device, as it happens: a batch of the text it is writing, its reasoning, or the tool it just called, on the conversation `cid`. Batched (a few a second, never one per token) and never replayed — a device that was away gets the final text over sync. `round` is that run's id, so two runs of one conversation do not overwrite each other on screen; `done` closes it. A client that does not know the frame ignores it
 ```
 
 关闭码含义如下：
@@ -157,9 +158,11 @@ Python 运行时的 `files` 最多返回 2,000 个目录项。如果还有更多
 
 从 0.1.36 起，**对话**也能跨设备同步，但走独立通道：文本通过 REST 请求写入中继 `/v1/sync/*` 存储，hub 只发更新提醒，见 [cloud.md](cloud.md#conversation-sync)。推送被中继接受或对话被删除后，账号下其他 socket 收到 `sync {what:"conversations", cursor, from}`。`cursor` 为变更后的账号计数器，`from` 为发起设备 ID。各设备再从自己的游标拉取新增内容；`from` 与自身 ID 相同则忽略。
 
-从 0.1.38、中继 0.20 起，hub 还传递**哪台设备正在回答**。设备开始或结束同步对话中的一轮任务时，调用 `/v1/sync/working`，其他连接收到 `working {cid, from, device_name, working, at}`。App 会在最后一条消息下显示「kwai 正在处理…」，直到收到 `working: false`、实际回复，或经过十分钟。中继 0.31 起，`working: true` 可附 `state` 和 `detail`：`state` 为 `working` 或等待用户卡片的 `waiting`；`detail` 为最多 160 字的步骤描述。例如界面可显示「kwai 正在处理：打开订票网站」或「kwai 在等你确认」。未发送新字段的设备仍显示一般工作状态，旧客户端忽略新字段。这些状态仅保存在中继内存。
+从 0.1.38、中继 0.20 起，hub 还传递**哪台设备正在回答**。设备开始或结束同步对话中的一轮任务时，调用 `/v1/sync/working`，其他连接收到 `working {cid, from, device_name, working, at}`。App 会在最后一条消息下显示「kwai 正在处理…」，直到收到 `working: false`、实际回复，或经过十分钟。中继 0.31 起，`working: true` 可附 `state` 和 `detail`：`state` 为 `working` 或等待用户卡片的 `waiting`；`detail` 为最多 160 字的步骤描述。例如界面可显示「kwai 正在处理：打开订票网站」或「kwai 在等你确认」。未发送新字段的设备仍显示一般工作状态，旧客户端忽略新字段。这些状态仅保存在中继内存。中继 0.32 起，同一条通道还传递**这一轮任务本身**：设备调用 `/v1/sync/stream` 分批上报正在写的内容、推理过程和调用的工具，账号下其他在线设备随写随画，与本机执行完全一致。每帧带对话 ID（`cid`）、运行设备和该轮的 `round`，因此同一对话的两次任务在屏幕上互不覆盖；文字按批发送（每秒几帧，不是每个字一帧）且不落库，错过的设备仍通过同步拿到最终文本。
 
-默认只同步主要聊天；旁聊仅在都开启「同时同步旁聊」的设备之间同步。key、服务商和设置仍留在填写它们的设备，文件和图片仍留在生成设备。各端的使用方式见 [every-device.md](every-device.md#the-same-conversations-everywhere)。
+**属主**是跑过该对话最后一轮任务的设备，它的本地文件持有完整上下文（同步只传纯文本）。各设备从对话行（`owner_device`、`owner_device_name`，见 [cloud.md](cloud.md#conversation-sync)）读到它，默认把下一句发给它，而不是自己执行；句首写 `@<设备>` 可改发别处，`@本机`（或本机设备名）把它收回。因此从别的设备同步过来的聊天会继续在那台设备上运行，用它已有的记忆。
+
+默认只同步主要聊天；旁聊仅在都开启「同时同步旁聊」的设备之间同步，属主规则对旁聊同样成立。key、服务商和设置仍留在填写它们的设备，文件和图片仍留在生成设备。各端的使用方式见 [every-device.md](every-device.md#the-same-conversations-everywhere)。
 
 ## 代码位置 {#the-code}
 

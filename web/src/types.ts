@@ -294,6 +294,13 @@ export interface ThreadMeta {
   /** a synced chat that was started on another device of the account ("From Pixel 8") */
   origin_device?: string;
   origin_device_name?: string;
+  /**
+   * The device that last ran a turn of this chat: its local copy holds the whole context
+   * (tool traces, reasoning, pictures), so the next line runs there. Sent by the relay on
+   * the conversation row (contract C7); absent on an older relay or before any device ran.
+   */
+  owner_device?: string;
+  owner_device_name?: string;
 }
 
 /** GET /api/sync/state: conversations synced between the account's devices (contract C7). */
@@ -1447,14 +1454,63 @@ export interface FileInfo {
   modified: string;
 }
 
+/**
+ * A batch of a run under way on another device of the account (contract C7, the relay's
+ * `stream` frame): what the model is writing (`delta`), thinking (`reasoning`) and the tool
+ * it just reached for (`tool`), batched by the sender rather than one frame per token. The
+ * relay never replays these, so a device that was away gets the final text over sync.
+ *
+ * The runtime usually turns this into the local bus frames below (`stream_start` and friends,
+ * with `remote: true`), so this shape reaches the page only when nothing translated it.
+ */
+export interface DeviceStreamFrame {
+  /** the synced conversation the run belongs to */
+  cid?: string;
+  /** the thread the runtime resolved that cid to, when it knows it */
+  thread?: string;
+  /** the device running the turn */
+  from?: string;
+  /** how that device is shown ("飞牛深圳") */
+  device_name?: string;
+  /** the run itself, as its device numbers it; buckets one run from the next */
+  round?: string;
+  /** batch number within the run */
+  seq?: number;
+  /** text written since the last batch */
+  delta?: string;
+  /** reasoning since the last batch */
+  reasoning?: string;
+  /** the step the run reached for */
+  tool?: { name?: string; stage?: string; summary?: string; ok?: boolean } | null;
+  /** the run is over; the synced reply takes it from here */
+  done?: boolean;
+}
+
+/**
+ * `remote: true` marks a stream frame a run on *another* device produced (contract C7): the
+ * runtime re-emits the local bus frames for it, so a run elsewhere draws like a run here. Its
+ * id is `{round}:{device}`, so two runs of one chat do not overwrite each other.
+ */
 export type WsMessage =
   | { kind: "hello"; state: StateSnapshot }
   | { kind: "event"; event: TimelineEvent }
   | { kind: "update"; event: TimelineEvent }
-  | { kind: "stream_start"; thread: string; id: string; ts: string }
-  | { kind: "delta"; thread: string; id: string; text: string }
-  | { kind: "reasoning_delta"; thread: string; id: string; text: string }
-  | { kind: "stream_end"; thread: string; id: string; discard?: boolean }
+  | { kind: "stream_start"; thread: string; id: string; ts?: string; remote?: boolean }
+  | { kind: "delta"; thread: string; id: string; text: string; remote?: boolean }
+  | { kind: "reasoning_delta"; thread: string; id: string; text: string; remote?: boolean }
+  | {
+      kind: "tool_delta";
+      thread: string;
+      id: string;
+      name: string;
+      stage?: string;
+      summary?: string;
+      ok?: boolean | null;
+      remote?: boolean;
+    }
+  | { kind: "stream_end"; thread: string; id: string; discard?: boolean; remote?: boolean }
+  /** a run on another device of the account, as it happens (contract C7), if nothing translated it */
+  | ({ kind: "stream" } & DeviceStreamFrame)
   | { kind: "status"; status: Status }
   | { kind: "thread"; thread: ThreadMeta }
   | { kind: "thread_deleted"; thread: string }

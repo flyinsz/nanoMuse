@@ -23,9 +23,20 @@ class RemoteTaskChat(private val context: Context, private val device: Device, t
     override var stopped = false
         private set
 
-    override val text: String get() = context.getString(R.string.nm_sync_from, device.name) + "\n\n" + reply.text
+    // nanoMuse: the reply itself, with no attribution glued on. A "来自 飞牛深圳\n\n" prefix used
+    // to ride here, and this is the string that gets *persisted* (`nmAppendAssistantLine`) and
+    // then synced to every other device — so the attribution became part of the answer
+    // everywhere, in the reply's own bubble. The device is named by the `info` block below, for
+    // this screen; what is stored, pushed and shown as the answer is only what was answered.
+    override val text: String get() = reply.text
+    // nanoMuse: the device line is a caption, not the answer. Drawn as a plain `text` block it
+    // took the reply's own bubble, type and all, so "来自 飞牛深圳" read as part of what that
+    // device said — a reader could not tell where the attribution stopped and the answer began.
+    // `info` is this app's existing muted small-print block (`FallbackInfoBlock`), the same
+    // treatment a sync caption gets, so the line announces the source and steps out of the way.
     override val blocks: List<AssistantBlock> get() = listOf(AssistantBlock(
-        id = "$callId:origin", kind = "text", content = context.getString(if (ended) R.string.nm_sync_from else R.string.nm_sync_working, device.name),
+        id = "$callId:origin", kind = "info",
+        content = context.getString(if (ended) R.string.nm_sync_from else R.string.nm_sync_working, device.name),
     )) + reply.blocks
 
     override fun stop() {

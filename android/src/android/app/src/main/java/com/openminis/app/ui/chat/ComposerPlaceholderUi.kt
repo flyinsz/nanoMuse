@@ -86,6 +86,8 @@ internal fun composerPlaceholderText(index: Int, soulName: String): String {
     // crash after the pool shrinks (rememberSaveable survives app upgrades).
     val safe = index.coerceIn(0, hints.size)
     return if (safe == ComposerPlaceholderRotation.DEFAULT_INDEX) {
+        // nanoMuse: the default line's text is the executor's now — the composer decides that
+        // and passes it in from the caller (see `ChatScreen`), so this stays upstream's line.
         stringResource(R.string.chat_input_placeholder, soulName)
     } else {
         stringResource(hints[safe - 1], soulName)

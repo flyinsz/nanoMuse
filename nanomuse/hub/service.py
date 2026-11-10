@@ -924,7 +924,29 @@ class HubService:
             await call.fail("usage", "text is required")
             return
         conversation = str(call.args.get("conversation") or call.sender_id or "device")
-        thread = self._incoming_thread(call, conversation)
+        # nanoMuse: a handed-off turn runs on *this* device's own conversation, not a fresh
+        # "From <device>" one — the whole point is to keep the context the owner already
+        # holds. `thread` names that conversation here; absent (an older caller), the old
+        # path runs unchanged. `handoff` marks the round as asked from elsewhere, which the
+        # sync engine reads (not `remote_from`, which would stop this chat syncing).
+        target = str(call.args.get("thread") or "")
+        handed = bool(call.args.get("handoff")) and bool(target)
+        if handed:
+            # the asker only knows the conversation as the relay sees it (a cid), not this
+            # device's local thread id, so accept either: the thread id itself, or the cid
+            # it maps to here
+            thread = self.svc.threads.get(target) or self.svc.sync.thread_of(target)
+            if thread is None:
+                await call.fail("no_thread", "that conversation is not here")
+                return
+            thread.handoff_from = {
+                "device": call.sender_id,
+                "name": call.sender_name,
+                "kind": str(call.sender.get("kind") or ""),
+                "conversation": conversation,
+            }
+        else:
+            thread = self._incoming_thread(call, conversation)
         if thread.busy or thread.device:
             await call.fail("busy", "this conversation is already busy")
             return
@@ -938,6 +960,7 @@ class HubService:
                 source="device",
                 label=call.sender_name,
                 language=str(call.args.get("language") or "")[:20],
+                mid=str(call.args.get("mid") or "")[:64],
             )
             self._incoming[call.id] = _IncomingTask(thread.id, thread.worker)
             final = await asyncio.wait_for(
@@ -957,6 +980,8 @@ class HubService:
         finally:
             self.svc.bus.unsubscribe(queue)
             self._incoming.pop(call.id, None)
+            if handed:
+                thread.handoff_from = None
         await call.result(
             {
                 "text": final,
@@ -1007,6 +1032,13 @@ class HubService:
                 elif ev.get("type") == "notice" and ev.get("text") == STOPPED_NOTICE:
                     stopped = True
                 await self._forward_event(call, ev, fresh=kind == "event")
+            elif kind in ("stream_start", "delta", "reasoning_delta", "stream_end"):
+                # nanoMuse: the run's words as they arrive, not only at the end. The asking
+                # device draws these the way it draws its own runs, so a turn handed to
+                # another device shows its writing, thinking and tool calls live.
+                if str(msg.get("thread") or "") != thread.id:
+                    continue
+                await self._forward_stream(call, msg)
             elif kind == "thread":
                 meta = msg.get("thread") or {}
                 if meta.get("id") != thread.id:
@@ -1076,6 +1108,41 @@ class HubService:
         elif etype == "artifact" and fresh and ev.get("path"):
             await self._forward_artifact(call, str(ev["path"]))
 
+    async def _forward_stream(self, call: IncomingCall, msg: dict[str, Any]) -> None:
+        """nanoMuse: one of the run's own bus frames, as a task event. The asking device
+        draws it the way it draws its own run: ``stream_start`` opens a bubble, ``delta``
+        and ``reasoning_delta`` grow its text and its thinking, ``stream_end`` closes it.
+        Tool frames still arrive as ordinary cards (``_forward_event``), so this carries
+        only the words. ``id`` is the local stream id; the caller buckets it, so two runs
+        of one conversation do not overwrite each other."""
+        kind = msg.get("kind")
+        if kind == "stream_start":
+            await call.event({"stage": "stream_start", "id": str(msg.get("id") or "")})
+        elif kind == "delta":
+            await call.event(
+                {
+                    "stage": "delta",
+                    "id": str(msg.get("id") or ""),
+                    "text": str(msg.get("text") or ""),
+                }
+            )
+        elif kind == "reasoning_delta":
+            await call.event(
+                {
+                    "stage": "reasoning_delta",
+                    "id": str(msg.get("id") or ""),
+                    "text": str(msg.get("text") or ""),
+                }
+            )
+        elif kind == "stream_end":
+            await call.event(
+                {
+                    "stage": "stream_end",
+                    "id": str(msg.get("id") or ""),
+                    "discard": bool(msg.get("discard")),
+                }
+            )
+
     async def _forward_artifact(self, call: IncomingCall, rel: str) -> None:
         try:
             path = self.svc.resolve_workspace_path(rel)
@@ -1116,6 +1183,49 @@ class HubService:
         task = asyncio.create_task(self._run_remote(thread, text), name=f"remote-{thread.id}")
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def handoff_to(
+        self, thread: Thread, text: str, device_id: str, device_name: str, mid: str = ""
+    ) -> None:
+        """nanoMuse: hand one line to the device that owns the conversation, to run on the
+        conversation *it* already holds (not a fresh "From <name>" one). Fire and forget: the
+        answer comes back over sync, and the asker's bubble is already on screen. The
+        conversation's cid travels as `thread`, so the owner finds its own thread there —
+        the main chat and a side chat alike.
+
+        [mid] is the asking device's own row id for this line. It travels so the owner writes
+        the *same* row rather than minting a second one: without it the line lands twice on
+        the relay — once from the asker (which pushes its own copy, C8) and once from the
+        owner — and every device draws the same question twice."""
+        cid = self.svc.sync.cid_of(thread.id) or ""
+        task = asyncio.create_task(
+            self._handoff(text, device_id, device_name, cid, thread.id, mid),
+            name=f"handoff-{device_id}",
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _handoff(
+        self, text: str, device_id: str, device_name: str, cid: str, local_id: str, mid: str = ""
+    ) -> None:
+        args: dict[str, Any] = {
+            "text": text,
+            "from": self.device_name,
+            "conversation": cid or local_id,
+            "handoff": True,
+        }
+        if cid:
+            args["thread"] = cid
+        if mid:
+            # the asker's own row id for this line: the owner writes that row instead of
+            # minting one, so the line reaches the relay once (see handoff_to)
+            args["mid"] = mid
+        try:
+            await self.call(device_id, "task", args, timeout=REMOTE_TASK_TIMEOUT_S)
+        except HubError as exc:
+            logger.info("handoff to {} failed: {}", device_name or device_id, exc.message)
+        except Exception:  # noqa: BLE001 - a handed-off line is best effort; sync reconciles
+            logger.exception("handoff to {}", device_id)
 
     async def _run_remote(self, thread: Thread, text: str) -> None:
         ui = self.svc.ui

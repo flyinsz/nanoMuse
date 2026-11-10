@@ -948,7 +948,7 @@ def test_a_pushed_event_reaches_the_devices_that_can_answer_it(client, monkeypat
     with connect(client, a) as pc, connect(client, keys[0]) as phone, connect(client, keys[1]) as old, connect(client, b) as stranger:
         pc.send_json(hello("computer", "pc-1", "desk", actions=("info", "approve")))
         welcome = pc.receive_json()
-        assert welcome["server"]["features"] == ["event_push"]
+        assert welcome["server"]["features"] == ["event_push", "stream_sync"]
         phone.send_json(hello("phone", "phone-1", "Pixel", actions=("info", "approve", "approve.any")))
         assert _skip_devices(phone)["type"] == "welcome"
         old.send_json(hello("phone", "phone-2", "Old", actions=("info", "approve")))
