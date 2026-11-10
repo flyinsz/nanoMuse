@@ -88,6 +88,11 @@ class FakeSyncRelay:
 
     def __init__(self) -> None:
         self.cloud = SimpleNamespace(api_key="")
+        # nanoMuse: the blob side of the relay, as `nanomuse/sync/files.py` calls it (plan C).
+        # A file's bytes live here under their sha, so a test can tell an upload from a miss.
+        self.blobs: dict[str, bytes] = {}
+        self.cloud.has_blob = self._has_blob
+        self.cloud.put_blob = self._put_blob
         self.enabled = True
         self.seq = 0
         self.convs: dict[str, dict[str, Any]] = {}
@@ -112,6 +117,16 @@ class FakeSyncRelay:
     def _next(self) -> int:
         self.seq += 1
         return self.seq
+
+    # nanoMuse: the relay's blob routes, as `nanomuse/sync/files.py` uses them (plan C).
+    # Content-addressed like the real one: the same bytes land once, whatever device sent them.
+    async def _has_blob(self, sha256: str) -> bool:
+        return sha256 in self.blobs
+
+    async def _put_blob(self, sha256: str, mime: str, data: bytes) -> dict[str, Any]:
+        self._check("put_blob")
+        self.blobs[sha256] = data
+        return {"sha256": sha256, "bytes": len(data), "mime": mime, "known": False}
 
     def _check(self, what: str) -> None:
         self.calls.append(what)
@@ -1236,3 +1251,116 @@ def test_the_first_sign_in_keeps_the_main_chat_and_a_new_account_relogs_the_hub(
     assert service.hub.view()["devices"] == [] and service.hub.chat_models == []
     assert service.sync.account_id == "acct-B"
     assert "before sign-in" not in [e["text"] for e in _events(client, MAIN_THREAD)]
+
+
+# ----------------------------------------------------------------------------- attachments to a device
+def _ask_phone(service: MuseService, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """The `→ Pixel 8` chat, with the hub call stubbed: what the frame carried is returned."""
+    monkeypatch.setattr(
+        service.hub, "device", lambda did: {"id": did, "name": "Pixel 8", "kind": "phone"}
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call(device_id: str, action: str, args: dict[str, Any], **kw: Any) -> dict:
+        calls.append({"device": device_id, "action": action, "args": args})
+        return {"text": "done"}
+
+    monkeypatch.setattr(service.hub, "call", fake_call)
+    return calls
+
+
+def test_a_device_chat_carries_its_attachment_by_reference(
+    synced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """nanoMuse: a chat addressed to a device sends the file with the line (plan C). The bytes
+    go up to the relay first; what the hub frame carries is the *reference* — never the body,
+    which would be a megabyte inside a frame the relay caps at 16 MiB."""
+    client, service, llm, relay = synced
+    calls = _ask_phone(service, monkeypatch)
+    (service.workspace() / "note.txt").write_text("hello from the desk", encoding="utf-8")
+
+    thread = service.hub.ask_device("phone-1")
+    client.post(f"/api/threads/{thread.id}/send", json={"text": "look", "files": ["note.txt"]})
+    wait_for(lambda: calls)
+
+    # the file reached the relay, once, as its own bytes
+    assert len(relay.blobs) == 1, relay.blobs
+    sha, data = next(iter(relay.blobs.items()))
+    assert data == b"hello from the desk" and len(sha) == 64
+    assert relay.calls.count("put_blob") == 1
+
+    assert calls[0]["device"] == "phone-1" and calls[0]["action"] == "task"
+    assert calls[0]["args"]["text"] == "look"
+    assert calls[0]["args"]["attachments"] == [
+        {"sha256": sha, "name": "note.txt", "mime": "text/plain", "size": len(data)}
+    ]
+    # the bubble over here carries the file too, so the chat reads as it did when typed
+    mine = [e for e in _events(client, thread.id) if e["type"] == "user"]
+    assert mine and mine[0]["files"][0]["name"] == "note.txt", mine
+
+
+def test_a_device_chat_without_a_file_has_no_attachments_key(
+    synced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backward compatibility: nothing attached sends exactly the frame it always did."""
+    client, service, llm, relay = synced
+    calls = _ask_phone(service, monkeypatch)
+
+    thread = service.hub.ask_device("phone-1")
+    client.post(f"/api/threads/{thread.id}/send", json={"text": "just words"})
+    wait_for(lambda: calls)
+
+    assert calls[0]["args"]["text"] == "just words"
+    assert "attachments" not in calls[0]["args"], calls[0]["args"]
+    assert relay.blobs == {}
+
+
+def test_a_file_the_relay_refuses_leaves_the_line_alone(
+    synced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that is here but will not go up — the relay is unreachable, or says no — is left
+    out: the words still reach the device. The line is not dropped over an attachment; it is the
+    sentence that was asked for. (A file that is not in the workspace at all fails earlier, in
+    `send` itself, the way it always did.)"""
+    client, service, llm, relay = synced
+    calls = _ask_phone(service, monkeypatch)
+    (service.workspace() / "note.txt").write_text("hello", encoding="utf-8")
+
+    async def refuse(self: Any, sha256: str, mime: str, data: bytes) -> dict[str, Any]:
+        raise CloudError(507, "store_full", "the relay's file store is full")
+
+    relay.cloud.put_blob = refuse.__get__(relay.cloud)  # type: ignore[method-assign]
+
+    thread = service.hub.ask_device("phone-1")
+    client.post(f"/api/threads/{thread.id}/send", json={"text": "look", "files": ["note.txt"]})
+    wait_for(lambda: calls)
+
+    assert calls[0]["args"]["text"] == "look"
+    assert "attachments" not in calls[0]["args"]
+
+
+def test_a_line_addressed_to_a_device_keeps_its_attachments_here(
+    synced, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`@<device>` with a file cannot be handed over — the device call carries words. It runs
+    here, as it always did, but says so now instead of looking like the `@` was ignored."""
+    client, service, llm, relay = synced
+    monkeypatch.setattr(service.hub, "others", lambda: [d for d in DEVICES if d["id"] != "pc-self"])
+    handed: list[Any] = []
+    monkeypatch.setattr(
+        service.hub,
+        "handoff_to",
+        lambda thread, text, device_id, device_name, mid="": handed.append(text),
+    )
+    llm.script.append(LLMResponse(content="Ran it here.", finish_reason="stop"))
+    (service.workspace() / "note.txt").write_text("x", encoding="utf-8")
+
+    r = client.post(
+        f"/api/threads/{MAIN_THREAD}/send",
+        json={"text": "@Pixel 8 read this", "files": ["note.txt"]},
+    )
+    assert r.status_code == 200
+    assert handed == [], "a file cannot ride the device call; nothing is handed over"
+
+    notices = [e for e in _events(client, MAIN_THREAD) if e["type"] == "notice"]
+    assert any("cannot take attachments" in e["text"] for e in notices), notices

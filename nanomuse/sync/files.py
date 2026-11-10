@@ -48,6 +48,7 @@ so the trim stops too and the surviving files are simply never reclaimed.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 import re
@@ -161,6 +162,16 @@ async def upload(
     relay already holds is *not* sent again — ``has_blob`` first, so a picture that came
     back around to this device costs one HEAD instead of 32 MiB.
 
+    One consequence of that shortcut: the ``PUT`` is what writes the reference, and writing
+    the reference is what advances ``last_used_at`` (see the module docstring). So a HEAD hit
+    answers a reference **without** moving the file up the trim order. That is right for the
+    traffic it saves, but it means the sender should upload and hand the reference over
+    promptly — the window between :func:`file_ref` and the frame that carries it is the one
+    stretch where a file this end already counts as "sent" can be evicted on the relay. In
+    practice that window is short: an offline handoff target is refused while routing
+    (``nanomuse/server/service.py:1276``), so a frame is never held waiting for a device that
+    is away.
+
     Every type is forwarded here (this is plan B2: a ``.pdf``, a ``.csv``, a ``.txt``
     travels like a picture), and the relay was widened to match — ``BLOB_MIMES`` now takes
     ``image/``, ``audio/``, ``video/``, ``application/`` and ``text/``. Two kinds of file
@@ -170,7 +181,10 @@ async def upload(
     does go through. The gate is the relay's to widen further — the runtime does not
     re-decide which files a person may attach.
     """
-    data = path.read_bytes()
+    # nanoMuse: hashing reads the whole file, and this runs inside the runtime's own event
+    # loop (a turn is in flight there). Off the loop, so a 32 MiB attachment does not stall
+    # every other coroutine — the relay does the same for its own hash-and-write.
+    data = await asyncio.to_thread(path.read_bytes)
     if not data:
         raise ValueError(f"{path} is empty; the relay does not store empty files")
     if len(data) > max_bytes:

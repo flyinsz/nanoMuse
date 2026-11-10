@@ -1179,8 +1179,10 @@ class HubService:
         self.svc.bus.publish({"kind": "thread", "thread": thread.meta()})
         return thread
 
-    def run_remote(self, thread: Thread, text: str) -> None:
-        task = asyncio.create_task(self._run_remote(thread, text), name=f"remote-{thread.id}")
+    def run_remote(self, thread: Thread, text: str, files: list[str] | None = None) -> None:
+        task = asyncio.create_task(
+            self._run_remote(thread, text, files or []), name=f"remote-{thread.id}"
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -1227,7 +1229,7 @@ class HubService:
         except Exception:  # noqa: BLE001 - a handed-off line is best effort; sync reconciles
             logger.exception("handoff to {}", device_id)
 
-    async def _run_remote(self, thread: Thread, text: str) -> None:
+    async def _run_remote(self, thread: Thread, text: str, files: list[str] | None = None) -> None:
         ui = self.svc.ui
         tid = thread.id
         device_id = thread.device or ""
@@ -1323,6 +1325,31 @@ class HubService:
                 )
 
         args: dict[str, Any] = {"text": text, "from": self.device_name, "conversation": tid}
+        # nanoMuse: the files attached to this line (plan C). Their bytes go up to the relay
+        # first — content-addressed, so one already there costs a HEAD, not a re-upload — and
+        # what the frame carries is the *reference*: an attachment must never be a megabyte of
+        # body inside a hub frame (those are capped at 16 MiB, and a 25 MB upload is legal).
+        # Hashing reads the whole file, so it runs off the loop: this coroutine shares a
+        # runtime that is mid-turn elsewhere. A file that will not go up is left out and the
+        # turn runs with the rest — a missing attachment is not a reason to drop the line.
+        refs: list[dict[str, Any]] = []
+        if files:
+            cloud = getattr(getattr(self.svc.sync, "client", None), "cloud", None)
+            if cloud is not None:
+                cloud.api_key = self._key()
+                for rel in files:
+                    try:
+                        path = await asyncio.to_thread(self.svc.resolve_workspace_path, rel)
+                        # imported here, not at the top: `nanomuse.sync` pulls the engine,
+                        # which pulls `server.service`, which imports this module — the same
+                        # cycle the coding tools below sidestep the same way.
+                        from nanomuse.sync.files import upload as upload_file
+
+                        refs.append(await upload_file(cloud, path))
+                    except (OSError, ValueError, CloudError) as exc:
+                        logger.info("handoff: attachment {!r} not sent: {}", rel, exc)
+        if refs:
+            args["attachments"] = refs
         if thread.agent.ui_language:
             # the person reads this chat in that language; the other device's runtime
             # answers in it (docs/hub.md, `task`)

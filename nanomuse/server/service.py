@@ -1231,8 +1231,19 @@ class MuseService:
             if once is not None and once[0] is not None:
                 # that device picks its own model; the one-turn client is not needed
                 spawn(once[0].close(), "closing the one-turn Cloud client")
-            event = self.ui.emit({"type": "user", "text": text, "thread": thread_id})
-            self.hub.run_remote(thread, text)
+            # nanoMuse: a file attached to a chat addressed to another device travels with
+            # the line (plan C). The bubble over here carries it like any other, and the
+            # paths go to `run_remote`, which puts the bytes on the relay first and hands
+            # that device a reference — never the bytes themselves.
+            event = self.ui.emit(
+                {
+                    "type": "user",
+                    "text": text,
+                    "thread": thread_id,
+                    **({"files": [a.model_dump() for a in attachments]} if attachments else {}),
+                }
+            )
+            self.hub.run_remote(thread, text, [a.path for a in attachments])
             return event
         # nanoMuse: whether this line really runs here — set by the routing below, read past
         # the early returns where the owner is recorded and the note folded in. A line a
@@ -1318,6 +1329,23 @@ class MuseService:
                     # watcher shows the wait from the moment the words arrive.
                     self.sync.message_sent(thread, working_device=route.device_id)
                     return event
+                if route.where is Where.HANDOFF and attachments:
+                    # nanoMuse: the person addressed a device *and* attached a file. The
+                    # relay's device call carries words, not bytes (plan C: attachments ride
+                    # the device chat, whose line goes over `run_remote`), so this one cannot
+                    # be handed over — it runs here instead, as it always did. Saying so is
+                    # the point: silently running it here looked like the `@` was ignored.
+                    self.ui.emit(
+                        {
+                            "type": "notice",
+                            "level": "info",
+                            "text": (
+                                f"{route.device_name or 'that device'} cannot take attachments; "
+                                "this ran here. To send a file to a device, use its chat."
+                            ),
+                            "thread": thread_id,
+                        }
+                    )
                 # nanoMuse: this line runs here, and `@本机` may have just taken it back from
                 # another device — whose conversation this context came from. One line in
                 # front tells the model the ground shifted under it, so a run that happened
