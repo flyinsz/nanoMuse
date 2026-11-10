@@ -605,10 +605,12 @@ def test_a_mention_hands_the_turn_to_the_device(synced, monkeypatch: pytest.Monk
         and ev["to_device_name"] == "Pixel 8"
     )
     # handed off: no local model call, and the text arrived without the mention — one
-    # `system_note` in front, which is what the far device's model reads (C7 rule 8)
+    # `system_note` in front, which is what the far device's model reads (C7 rule 8). The
+    # line's own row id travels with it so the owner writes that row, not a second one.
     wait_for(lambda: sent)
     note = system_note("Pixel 8", "phone-1")
-    assert sent[0] == (f"[{note}]\n\nwhat is on the screen?", "phone-1", "Pixel 8", sent[0][3])
+    assert sent[0] == (f"[{note}]\n\nwhat is on the screen?", "phone-1", "Pixel 8", ev["mid"])
+    assert sent[0][3]
     # the note travels with the line, not into the bubble: the words are as typed
     assert "[" not in ev["text"] and note not in ev["text"]
     assert not llm.calls
