@@ -3,8 +3,8 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { setLocaleSetting } from "../i18n";
-import type { SkillInfo, SkillsData } from "../types";
-import { Composer, WorkingLine } from "./ChatScreen";
+import type { SkillInfo, SkillsData, UserEvent } from "../types";
+import { Composer, WorkingLine, startsAnotherDeviceStretch } from "./ChatScreen";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 // the composer's only window use is the quick-chat focus listener
@@ -266,5 +266,31 @@ describe("Composer slash menu skills", () => {
     const preventDefault = vi.fn();
     act(() => menu!.root.findByProps({ "aria-label": "Message" }).props.onKeyDown({ key: "Tab", preventDefault }));
     expect(preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+describe("the From <device> caption", () => {
+  // nanoMuse: a caption marks a *change* of writer, not every message (executor handoff v2,
+  // contract C8). It used to sit over every other bubble of a back-and-forth, which read as
+  // noise; the Android client only emits the first row of each other-device stretch.
+  const user = (via_device?: string): UserEvent =>
+    ({ id: "e", thread: "main", type: "user", text: "hi", ts: "2026-11-11T00:00:00Z", ...(via_device ? { via_device } : {}) });
+
+  it("names the device on the first row of its stretch", () => {
+    expect(startsAnotherDeviceStretch(user("NAS"), user())).toBe(true);
+    expect(startsAnotherDeviceStretch(user("NAS"), undefined)).toBe(true);
+  });
+
+  it("stays quiet while the same device keeps writing", () => {
+    expect(startsAnotherDeviceStretch(user("NAS"), user("NAS"))).toBe(false);
+  });
+
+  it("says nothing on this device's own rows", () => {
+    expect(startsAnotherDeviceStretch(user(), user("NAS"))).toBe(false);
+    expect(startsAnotherDeviceStretch(user(), user())).toBe(false);
+  });
+
+  it("names it again when the writer changes back", () => {
+    expect(startsAnotherDeviceStretch(user("NAS"), user("Mac"))).toBe(true);
   });
 });

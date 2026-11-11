@@ -17,9 +17,13 @@ import com.openminis.app.R
 import io.github.nanomuse.sync.ConversationSync
 
 /**
- * "From Pixel 8" over a turn that was written on another device of the account (contract C8:
- * the caption is per message; a chat carries no badge). Nothing for this phone's own rows.
- * [messageId] is the database row's id; [end] puts it on the person's side of the chat.
+ * "From Pixel 8" over a stretch of the chat that was written on another device of the account.
+ * Nothing for this phone's own rows.
+ *
+ * A caption marks a *change* of writer, not every message (executor handoff v2, contract C8):
+ * `ConversationSync.captions` only carries the first row of each other-device stretch, so a
+ * back-and-forth does not repeat the same line over every other bubble. [messageId] is the
+ * database row's id; [end] puts it on the person's side of the chat.
  */
 @Composable
 fun NmSyncCaption(messageId: String, end: Boolean, modifier: Modifier = Modifier) {

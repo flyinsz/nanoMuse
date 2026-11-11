@@ -418,7 +418,7 @@ function EventView({
   const body = (() => {
     switch (event.type) {
       case "user":
-        return <UserBubble event={event} onOpenFile={onOpenFile} />;
+        return <UserBubble event={event} prev={prev} onOpenFile={onOpenFile} />;
       case "assistant":
         if (event.quiet) return <QuietLine text={event.text} about={event.about} ts={event.ts} />;
         return (
@@ -478,11 +478,29 @@ function TimeDivider({ ts }: { ts?: string }) {
   return <div className="pt-2 pb-0.5 text-center text-[11.5px] font-medium text-muted">{label}</div>;
 }
 
-function UserBubble({ event, onOpenFile }: { event: UserEvent; onOpenFile: (path: string) => void }) {
+/**
+ * nanoMuse: whether this line begins a stretch written on another device of the account, and so
+ * carries the "From <device>" caption (executor handoff v2, contract C8).
+ *
+ * A caption marks a *change* of writer, never every message: a stretch of one device's rows sits
+ * under the single line that names it, and a stretch of this device's own rows carries none. The
+ * Android client reads it the same way (`SyncEngine.captions` emits the first row of each
+ * other-device stretch). A timeline with nothing before it counts as a change, so the very first
+ * synced line still says where it came from.
+ */
+export function startsAnotherDeviceStretch(event: UserEvent, prev?: TimelineEvent): boolean {
+  const device = event.via_device ?? "";
+  if (!device) return false;
+  const before = prev?.type === "user" ? (prev.via_device ?? "") : "";
+  return device !== before;
+}
+
+function UserBubble({ event, prev, onOpenFile }: { event: UserEvent; prev?: TimelineEvent; onOpenFile: (path: string) => void }) {
   const t = useT();
   const files = event.files ?? [];
   const pictures = files.filter((f) => f.kind === "image");
   const others = files.filter((f) => f.kind !== "image");
+  const changedWriter = startsAnotherDeviceStretch(event, prev);
   return (
     <div className="rise flex flex-col items-end pl-12">
       {event.via === "call" ? (
@@ -496,7 +514,8 @@ function UserBubble({ event, onOpenFile }: { event: UserEvent; onOpenFile: (path
           <MonitorSmartphone size={11} /> {t("to {device}", { device: event.to_device_name || event.to_device || "" })}
         </span>
       ) : (
-        (event.via_device_name || event.via_device) && (
+        (event.via_device_name || event.via_device) &&
+        changedWriter && (
           <span className="mb-1 text-[11.5px] font-medium text-muted">{t("From {device}", { device: event.via_device_name || event.via_device || "" })}</span>
         )
       )}
