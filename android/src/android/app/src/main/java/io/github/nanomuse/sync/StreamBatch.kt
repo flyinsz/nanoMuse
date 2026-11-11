@@ -173,3 +173,21 @@ object Streams {
         return if (kept.size == byRound.size) byRound else kept
     }
 }
+
+/**
+ * nanoMuse: what changed in the rows another device wrote while a handed-over turn ran
+ * (executor handoff v2 §4.3). Kept here, apart from Android, so the rule can be checked with
+ * JUnit — `ConversationSync` supplies the two readings.
+ */
+object RowBaseline {
+    /**
+     * Whether [now] holds a row [before] did not.
+     *
+     * The chat already holds the *earlier* answers another device wrote, and those are not this
+     * turn's; only a row that appeared while the turn ran says it finished. Asked when this
+     * phone's own call for that turn failed or timed out: the hub socket drops and reconnects on
+     * its own, and a call running across a drop never hears its result, while the far device
+     * finishes and pushes as usual.
+     */
+    fun arrived(before: Set<String>, now: Set<String>): Boolean = now.any { it !in before }
+}

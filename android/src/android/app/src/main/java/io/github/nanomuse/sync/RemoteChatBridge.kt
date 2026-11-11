@@ -28,6 +28,13 @@ class RemoteChatBridge(
         // (C8: a row written on another device is not this phone's turn). The host must not
         // write a second copy of it, which is what put the same answer in the chat twice.
         val handedOver: Boolean get() = false
+        // nanoMuse: whether the far device's answer has already landed in this chat, so a
+        // failure here is not worth a line. Measured: the phone's hub socket dropped mid-turn
+        // (a reconnect), the far device finished and pushed its answer anyway, and the call
+        // timed out fifteen minutes later — the chat then read "NAS-by-Donny 未回复：现在没有连上
+        // 中继" *underneath* the answer that had arrived. The host asks this before writing the
+        // failure, so a turn that did finish is never reported as unanswered.
+        suspend fun answerAlreadyLanded(sessionId: String): Boolean = false
         // nanoMuse: [mid] is the local row id of the line being handed over, so the device that
         // runs it writes that row rather than one of its own (executor handoff v2 §E).
         suspend fun run(sessionId: String, mid: String, update: () -> Unit)

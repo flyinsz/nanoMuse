@@ -440,6 +440,35 @@ object ConversationSync {
     }
 
     /**
+     * nanoMuse: the rows another device wrote into a chat right now — the baseline a handed-over
+     * turn is judged against. Read when the turn is handed over; [hasNewRemoteRow] then asks
+     * whether one arrived while it ran. A chat that already held an older remote answer must not
+     * read as this turn's.
+     */
+    suspend fun remoteRowIds(sessionId: String): Set<String> {
+        if (sessionId.isBlank()) return emptySet()
+        val ctx = app ?: return emptySet()
+        return runCatching {
+            RoomSyncStore(ctx).messages(sessionId).filter { it.device.isNotBlank() }.map { it.messageId }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    /**
+     * nanoMuse: whether another device's row reached [sessionId] while a handed-over turn ran, so
+     * that turn did finish and its answer is here — a failed call for it must not be reported as
+     * "did not answer" (executor handoff v2 §4.3).
+     *
+     * The hub socket drops and reconnects on its own, and a call running across a drop never
+     * hears its result; the far device, meanwhile, finishes and pushes as usual. Measured: the
+     * chat showed "NAS-by-Donny 未回复：现在没有连上中继" *underneath* the answer that had already
+     * arrived. [baseline] is what the chat held when the turn went out.
+     *
+     * Best effort: a read that fails says no, which keeps the older behaviour.
+     */
+    suspend fun hasNewRemoteRow(sessionId: String, baseline: Set<String>): Boolean =
+        RowBaseline.arrived(baseline, remoteRowIds(sessionId))
+
+    /**
      * The hub's `{"type": "stream", "cid", "from", "device_name", "round", "seq", "delta"?,
      * "reasoning"?, "tool"?, "done"}` (executor handoff v2 §C): one batch of a turn running on
      * another device. Mapped to the local chat and folded into that chat's rounds by `round`, so

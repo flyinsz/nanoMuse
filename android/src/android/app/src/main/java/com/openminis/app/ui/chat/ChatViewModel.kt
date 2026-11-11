@@ -6430,7 +6430,15 @@ class ChatViewModel(
                 // (C8). Writing it here too is what showed the same answer twice, so only this
                 // phone's own report of a failure or a stop is written: no far row will come for
                 // those, the run never produced an answer to travel.
-                val write = !task.handedOver || task.failed || task.stopped
+                //
+                // A failure is not written either when the far device's answer has already
+                // landed: measured on the phone, the hub socket dropped mid-turn, the far device
+                // finished and pushed its answer anyway, and the call timed out fifteen minutes
+                // later — the chat then read "NAS-by-Donny 未回复：现在没有连上中继" underneath the
+                // answer that had arrived. Reporting a finished turn as unanswered is worse than
+                // the failure it describes.
+                val landed = task.answerAlreadyLanded(sessionId)
+                val write = !task.handedOver || ((task.failed || task.stopped) && !landed)
                 if (write) nmAppendAssistantLine(sessionId, task.text)
                 val bubbleId = "nm_remote_$id"
                 // nanoMuse: the live bubble goes as soon as the real row is here. It used to be

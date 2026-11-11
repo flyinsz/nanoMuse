@@ -34,6 +34,30 @@ class RemoteTaskChat(
     private var handed = false
     override val handedOver: Boolean get() = handed
 
+    // nanoMuse: set on `run`, once the session is open — the chat this turn was handed to, and
+    // the rows another device had already written into it. The pair is what tells a later
+    // failure whether *this* turn produced an answer (see `answerAlreadyLanded`).
+    private var handedSession: String = ""
+    private var handedBaseline: Set<String> = emptySet()
+
+    /**
+     * nanoMuse: whether the far device's answer already reached this chat, so a failed call is
+     * not worth a line. Measured on the phone: the hub socket dropped mid-turn, the far device
+     * finished and pushed its answer anyway, and the call timed out fifteen minutes later — the
+     * chat then read "NAS-by-Donny 未回复：现在没有连上中继" *underneath* the answer that had
+     * arrived. A turn that did finish is never reported as unanswered.
+     *
+     * Judged by what changed since the turn went out (the baseline taken on `run`), not by
+     * whether the chat holds any remote row at all: an older answer from an earlier turn is not
+     * this turn's. Best effort — a read that fails keeps the older behaviour.
+     */
+    override suspend fun answerAlreadyLanded(sessionId: String): Boolean {
+        if (!handed) return false
+        val sid = handedSession.ifBlank { sessionId }
+        if (sid.isBlank()) return false
+        return runCatching { ConversationSync.hasNewRemoteRow(sid, handedBaseline) }.getOrDefault(false)
+    }
+
     // nanoMuse: the reply itself, with no attribution glued on. A "来自 飞牛深圳\n\n" prefix used
     // to ride here, and this is the string that gets *persisted* (`nmAppendAssistantLine`) and
     // then synced to every other device — so the attribution became part of the answer
@@ -61,6 +85,9 @@ class RemoteTaskChat(
         task.cid = ConversationSync.cidOf(sessionId) ?: ""
         task.mid = mid
         handed = task.cid.isNotBlank()
+        handedSession = sessionId
+        // the rows already here, so a failure can tell this turn's answer from an older one
+        handedBaseline = runCatching { ConversationSync.remoteRowIds(sessionId) }.getOrDefault(emptySet())
         try {
             exchange(sessionId, update)
         } catch (e: CancellationException) {

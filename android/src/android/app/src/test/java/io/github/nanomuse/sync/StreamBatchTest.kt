@@ -229,4 +229,22 @@ class StreamBatchTest {
         assertEquals(setOf("live", "stale"), rounds.keys)
         assertEquals(setOf("live"), Streams.prune(rounds, now).keys)
     }
+
+    @Test fun `a row that appeared while the turn ran says it finished`() {
+        // nanoMuse: what decides whether a failed call for a handed-over turn is worth a
+        // "did not answer" line. The hub socket drops and reconnects on its own, and a call
+        // running across a drop never hears its result, while the far device finishes and
+        // pushes as usual — measured, the chat then read "NAS-by-Donny 未回复" underneath the
+        // answer that had arrived.
+        assertTrue(RowBaseline.arrived(setOf("old"), setOf("old", "new")))
+        assertTrue(RowBaseline.arrived(emptySet(), setOf("new")))
+    }
+
+    @Test fun `an answer from an earlier turn is not this turn's`() {
+        // the chat already holds what another device wrote before; that must not read as the
+        // handed-over turn having finished
+        assertFalse(RowBaseline.arrived(setOf("old"), setOf("old")))
+        assertFalse(RowBaseline.arrived(setOf("a", "b"), setOf("a", "b")))
+        assertFalse(RowBaseline.arrived(emptySet(), emptySet()))
+    }
 }
