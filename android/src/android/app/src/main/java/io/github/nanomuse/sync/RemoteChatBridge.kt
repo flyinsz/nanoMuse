@@ -23,7 +23,14 @@ class RemoteChatBridge(
         val blocks: List<AssistantBlock>
         val failed: Boolean
         val stopped: Boolean get() = false
-        suspend fun run(sessionId: String, update: () -> Unit)
+        // nanoMuse: true when another device ran this turn on the chat's own conversation, so
+        // the answer is *that* device's row — it pushes it, and this phone receives it by pull
+        // (C8: a row written on another device is not this phone's turn). The host must not
+        // write a second copy of it, which is what put the same answer in the chat twice.
+        val handedOver: Boolean get() = false
+        // nanoMuse: [mid] is the local row id of the line being handed over, so the device that
+        // runs it writes that row rather than one of its own (executor handoff v2 §E).
+        suspend fun run(sessionId: String, mid: String, update: () -> Unit)
         fun stop()
     }
     interface Host {
@@ -33,7 +40,12 @@ class RemoteChatBridge(
         fun clearDraft()
         fun restoreDraft(text: String)
         suspend fun session(): String
-        suspend fun user(sessionId: String, text: String)
+        // nanoMuse: writes the asked line into the local chat and answers with that row's id.
+        // The id goes on as `mid` when the turn is handed over, so the device that runs it
+        // writes that same row instead of minting one of its own — one line, one bubble, one
+        // relay row (executor handoff v2 §E, "单 `mid` 直通"). Without it a handed-over turn
+        // arrives twice: the far device's own row, and this phone's local one (§C8).
+        suspend fun user(sessionId: String, text: String): String
         fun started(sessionId: String) {}
         fun ended(sessionId: String, completed: Boolean) {}
         fun show(id: String, task: Task)
@@ -137,11 +149,11 @@ class RemoteChatBridge(
             var taskReturned = false
             try {
                 sessionId = host.session()
-                host.user(sessionId, text)
+                val mid = host.user(sessionId, text)
                 userShown = true
                 host.started(sessionId)
                 host.show(id, run.task)
-                run.task.run(sessionId) { if (active === run) host.show(id, run.task) }
+                run.task.run(sessionId, mid) { if (active === run) host.show(id, run.task) }
                 taskReturned = true
             } catch (e: CancellationException) {
                 run.task.stop()

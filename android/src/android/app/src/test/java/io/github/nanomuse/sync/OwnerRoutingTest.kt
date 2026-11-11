@@ -40,7 +40,7 @@ class OwnerRoutingTest {
         override fun clearDraft() { draft = "" }
         override fun restoreDraft(text: String) { draft = text }
         override suspend fun session() = "session"
-        override suspend fun user(sessionId: String, text: String) {}
+        override suspend fun user(sessionId: String, text: String): String = "mid-1"
         override fun show(id: String, task: RemoteChatBridge.Task) {}
         override suspend fun finish(sessionId: String, id: String, task: RemoteChatBridge.Task) {}
         override fun afterTurn() {}
@@ -54,7 +54,11 @@ class OwnerRoutingTest {
         override val text = "remote answer"
         override val blocks = emptyList<AssistantBlock>()
         override val failed = false
-        override suspend fun run(sessionId: String, update: () -> Unit) = update()
+        var gotMid: String? = null
+        override suspend fun run(sessionId: String, mid: String, update: () -> Unit) {
+            gotMid = mid
+            update()
+        }
         override fun stop() {}
     }
 
@@ -71,11 +75,19 @@ class OwnerRoutingTest {
 
     @Test fun `no mention and a remote owner routes to the owner`() = runTest {
         val rec = Recorder()
-        val b = bridge(Host(owner = "desk"), rec)
+        val task = Task()
+        val b = RemoteChatBridge(CoroutineScope(Dispatchers.Unconfined), Host(owner = "desk")) { device, text, _ ->
+            rec.routed = device.id to text
+            task
+        }
 
         assertTrue("an owner route is addressed here", b.send("tidy the downloads", listOf(desk), false, false))
 
         assertEquals("desk" to "tidy the downloads", rec.routed)
+        // nanoMuse: the asked line's own row id rides along as `mid`, so the far device writes
+        // that row instead of minting one of its own (§4.3). Without it the line — and the
+        // answer — reach the relay twice and the chat shows the same turn twice.
+        assertEquals("the row id of the line goes with the task", "mid-1", task.gotMid)
     }
 
     @Test fun `no mention and no owner runs here`() = runTest {

@@ -6380,7 +6380,10 @@ class ChatViewModel(
             }
             override fun restoreDraft(text: String) { if (_inputText.value.isEmpty()) _inputText.value = text }
             override suspend fun session(): String = ensureSession()
-            override suspend fun user(sessionId: String, text: String) = nmAppendUserLine(sessionId, text)
+            // nanoMuse: the asked line's own row id comes back, and rides on as `mid` when the
+            // turn is handed over, so the far device writes that row instead of one of its own
+            // (executor handoff v2 §E). Without it the answer lands twice (§C8).
+            override suspend fun user(sessionId: String, text: String): String = nmAppendUserLine(sessionId, text)
             override fun started(sessionId: String) {
                 SessionActivityTracker.setActive(sessionId) { nmRemoteBridge.cancel() }
             }
@@ -6395,11 +6398,29 @@ class ChatViewModel(
                 _messages.value = if (_messages.value.any { it.id == message.id }) _messages.value.map { if (it.id == message.id) message else it } else _messages.value + message
             }
             override suspend fun finish(sessionId: String, id: String, task: io.github.nanomuse.sync.RemoteChatBridge.Task) {
-                nmAppendAssistantLine(sessionId, task.text)
+                // nanoMuse: a handed-over turn's answer is the far device's own row — it writes
+                // and pushes it (executor handoff v2 §4.3) and this phone receives it by pull
+                // (C8). Writing it here too is what showed the same answer twice, so only this
+                // phone's own report of a failure or a stop is written: no far row will come for
+                // those, the run never produced an answer to travel.
+                val write = !task.handedOver || task.failed || task.stopped
+                if (write) nmAppendAssistantLine(sessionId, task.text)
                 val savedId = _messages.value.lastOrNull()?.id
-                _messages.value = _messages.value.filterNot { it.id == "nm_remote_$id" }.map {
-                    if (it.id == savedId) it.copy(toolBlocks = task.blocks, error = if (task.failed) task.text else null) else it
-                }
+                _messages.value = _messages.value.map {
+                    when {
+                        // the pulled row supersedes this bubble, which is dropped as soon as the
+                        // pull lands (`reloadSessionFromDb` rebuilds from the database). Keeping
+                        // it until then is what stops the answer blinking out for a pull cycle.
+                        it.id == "nm_remote_$id" && !write -> it.copy(
+                            toolBlocks = task.blocks, isStreaming = false,
+                            isAwaitingModelResponse = false,
+                            error = if (task.failed) task.text else null,
+                        )
+                        it.id == "nm_remote_$id" -> it
+                        it.id == savedId -> it.copy(toolBlocks = task.blocks, error = if (task.failed) task.text else null)
+                        else -> it
+                    }
+                }.filterNot { it.id == "nm_remote_$id" && write }
             }
             override fun afterTurn() { nmSendNextQueued() }
             // nanoMuse: the owner map is filled at init and after a pull; a send asks for a
@@ -6754,11 +6775,12 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun nmAppendUserLine(sid: String, text: String) {
+    private suspend fun nmAppendUserLine(sid: String, text: String): String {
         val partsJson = """[{"type":"text","value":${escapeJson(text)}}]"""
         val entity = chatRepository.appendMessage(sid, "user", partsJson)
         agentHistory.add(LLMMessage(role = LLMMessage.Role.USER, content = text))
         _messages.value = _messages.value + ChatMessage(id = entity.id, role = "user", content = text)
+        return entity.id
     }
 
     private suspend fun nmAppendAssistantLine(sid: String, text: String) {

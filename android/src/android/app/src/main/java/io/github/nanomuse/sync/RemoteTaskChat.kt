@@ -27,6 +27,13 @@ class RemoteTaskChat(
     override var stopped = false
         private set
 
+    // nanoMuse: set on `run`, once the session is open. Non-blank means the far device runs the
+    // turn on the chat's own conversation and writes its answer there — that row is what reaches
+    // the relay, and this phone gets it by pull. Writing it here as well is what showed the same
+    // answer twice (§C8).
+    private var handed = false
+    override val handedOver: Boolean get() = handed
+
     // nanoMuse: the reply itself, with no attribution glued on. A "来自 飞牛深圳\n\n" prefix used
     // to ride here, and this is the string that gets *persisted* (`nmAppendAssistantLine`) and
     // then synced to every other device — so the attribution became part of the answer
@@ -46,12 +53,14 @@ class RemoteTaskChat(
         reply.finish(context.getString(R.string.nm_coding_stopped), stopped = true)
     }
 
-    override suspend fun run(sessionId: String, update: () -> Unit) {
+    override suspend fun run(sessionId: String, mid: String, update: () -> Unit) {
         // nanoMuse: name the chat before the call goes. A cid is the only thing both sides
         // call this conversation by, so it is what makes the far end run the turn on the
         // context it already holds instead of a fresh `From <device>` thread (§E). Best
         // effort: a chat with no cid yet keeps the older behaviour rather than failing.
         task.cid = ConversationSync.cidOf(sessionId) ?: ""
+        task.mid = mid
+        handed = task.cid.isNotBlank()
         try {
             exchange(sessionId, update)
         } catch (e: CancellationException) {

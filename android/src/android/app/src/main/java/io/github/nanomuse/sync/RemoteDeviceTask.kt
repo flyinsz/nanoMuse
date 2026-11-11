@@ -20,6 +20,12 @@ class RemoteDeviceTask(
     // conversation, and one whose live output does not travel back to the asker (§4.4).
     // Filled just before the call, once the local session id is known.
     var cid: String = "",
+    // nanoMuse: the local row id of the line being handed over (§E, "单 `mid` 直通"). The
+    // device that runs the turn writes *this* row instead of minting its own, so the line and
+    // the answer reach the relay once. Without it the same turn lands twice — the far device's
+    // row and this phone's — and the chat shows the answer twice. Blank means this phone's
+    // older behaviour: the far side writes its own row.
+    var mid: String = "",
 ) {
     suspend fun run(
         call: suspend (String, String, String, JSONObject, (JSONObject) -> Unit) -> JSONObject,
@@ -36,6 +42,7 @@ class RemoteDeviceTask(
                     val args = JSONObject()
                         .put("text", text).put("language", language).put("stream", true)
                     if (cid.isNotBlank()) args.put("thread", cid).put("handoff", true)
+                    if (mid.isNotBlank()) args.put("mid", mid)
                     val result = call(callId, device.id, "task", args) { events.trySend(it) }
                     events.close()
                     consumer.join()

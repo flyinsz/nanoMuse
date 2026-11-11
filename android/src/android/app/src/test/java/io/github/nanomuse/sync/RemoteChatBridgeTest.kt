@@ -28,7 +28,7 @@ class RemoteChatBridgeTest {
         override fun clearDraft() { draft = "" }
         override fun restoreDraft(text: String) { draft = text }
         override suspend fun session() = "session"
-        override suspend fun user(sessionId: String, text: String) { userCount++ }
+        override suspend fun user(sessionId: String, text: String): String { userCount++; return "mid-$userCount" }
         override fun started(sessionId: String) { tracked++ }
         override fun ended(sessionId: String, completed: Boolean) { tracked--; completions += completed }
         override fun show(id: String, task: RemoteChatBridge.Task) { updates++ }
@@ -45,7 +45,7 @@ class RemoteChatBridgeTest {
         override var stopped = false
         var stops = 0
         var lateUpdate: (() -> Unit)? = null
-        override suspend fun run(sessionId: String, update: () -> Unit) {
+        override suspend fun run(sessionId: String, mid: String, update: () -> Unit) {
             lateUpdate = update
             update()
             if (wait) awaitCancellation()
