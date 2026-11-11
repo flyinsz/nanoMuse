@@ -1226,6 +1226,7 @@
     <string name="nm_remote_no_answer">%1$s ทำงานเสร็จโดยไม่มีคำตอบ</string>
     <string name="nm_remote_failed">%1$s ไม่ตอบกลับ: %2$s</string>
     <string name="nm_remote_offline">%1$s ออฟไลน์อยู่</string>
+    <string name="nm_remote_unknown_device">ไม่พบอุปกรณ์ชื่อ %1$s ที่เข้าถึงได้ จึงไม่ได้ส่ง ดูได้ที่อุปกรณ์ หรือเขียนบรรทัดโดยไม่มี \@ เพื่อให้ทำงานบนเครื่องนี้</string>
     <string name="nm_remote_chat_busy">รอให้การสนทนานี้ทำงานเสร็จก่อนส่งงานไปยังอุปกรณ์</string>
 
     <string name="nm_reply_unread">คำตอบที่ยังไม่ได้อ่าน</string>

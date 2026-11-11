@@ -1203,6 +1203,7 @@
     <string name="nm_remote_no_answer">%1$s 已结束，但没有回复。</string>
     <string name="nm_remote_failed">%1$s 未回复：%2$s</string>
     <string name="nm_remote_offline">%1$s 当前离线。</string>
+    <string name="nm_remote_unknown_device">没有能到达的「%1$s」，这条没有发出去。可在「设备」里查看，或去掉 \@ 让它在这台手机上跑。</string>
     <string name="nm_remote_chat_busy">请等本次对话执行完毕后再发送设备任务。</string>
 
     <string name="nm_reply_unread">未读回复</string>

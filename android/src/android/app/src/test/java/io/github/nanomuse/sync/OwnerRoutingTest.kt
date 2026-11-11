@@ -24,7 +24,11 @@ import org.junit.Test
 class OwnerRoutingTest {
     private val desk = Device("desk", "Desk", "computer", "Linux", "", true, listOf("task"), 0)
 
-    private class Host(private val owner: String?, private val name: String? = null) : RemoteChatBridge.Host {
+    private class Host(
+        private val owner: String?,
+        private val name: String? = null,
+        private val namesSelf: Boolean = true,
+    ) : RemoteChatBridge.Host {
         var running = false
         var draft = ""
         var lastIssue: RemoteChatBridge.Issue? = null
@@ -43,6 +47,7 @@ class OwnerRoutingTest {
         override fun ownerId(): String? = owner
         override fun ownerName(): String? = name
         override fun takeOwnerHere(text: String) { tookHere = text }
+        override fun namesSelf(text: String): Boolean = namesSelf
     }
 
     private class Task : RemoteChatBridge.Task {
@@ -116,30 +121,40 @@ class OwnerRoutingTest {
     }
 
     @Test fun `a mention of this phone runs here, the owner must not take it`() = runTest {
-        // `@本机` (and any unknown `@`) resolves to no device: the person meant this phone, so the
-        // owner fallback must not quietly hand the line to another device instead
+        // `@本机` resolves to no device: the person meant this phone, so the owner fallback must
+        // not quietly hand the line to another device instead
         val rec = Recorder()
-        val host = Host(owner = "desk")
+        val host = Host(owner = "desk", namesSelf = true)
         val b = bridge(host, rec)
 
         assertFalse(b.send("@本机 do it here", listOf(desk), false, false))
-        assertFalse(b.send("@nobody do it", listOf(desk), false, false))
         assertNull(rec.routed)
         assertEquals("no refusal: `@本机` is not an error", null, host.lastIssue)
     }
 
+    @Test fun `an @ naming no reachable device is refused, not answered here`() = runTest {
+        // the device named is offline, or no device answers to that name: running the line here
+        // would answer from this phone's memory a conversation it never held, which is what an
+        // `@` to an unreachable device used to do. It is refused, and the draft comes back.
+        val rec = Recorder()
+        val host = Host(owner = "desk", namesSelf = false)
+        val b = bridge(host, rec)
+
+        assertTrue("a refusal is addressed here, so it must not fall into the local model", b.send("@nobody do it", listOf(desk), false, false))
+        assertNull("nothing is routed", rec.routed)
+        assertEquals(RemoteChatBridge.Issue.UNKNOWN_DEVICE, host.lastIssue)
+        assertEquals("the draft comes back", "@nobody do it", host.draft)
+        assertNull("an unknown `@` is not this phone, so the owner does not move", host.tookHere)
+    }
+
     @Test fun `a line naming no device asks the host to judge the owner`() = runTest {
-        // the bridge cannot tell `@本机` from `@nobody`; it hands the text over and the host judges,
-        // so an unknown `@` does not move the owner
-        val host = Host(owner = "desk")
+        // the bridge cannot tell `@本机` from `@nobody`; it asks the host, which judges, so an
+        // unknown `@` does not move the owner
+        val host = Host(owner = "desk", namesSelf = true)
         val b = bridge(host, Recorder())
 
         b.send("@本机 do it here", listOf(desk), false, false)
         assertEquals("@本机 do it here", host.tookHere)
-
-        host.tookHere = null
-        b.send("@nobody do it", listOf(desk), false, false)
-        assertEquals("an unknown `@` is offered for the same judgement", "@nobody do it", host.tookHere)
     }
 
     @Test fun `a line with no mention never asks the host to move the owner`() = runTest {

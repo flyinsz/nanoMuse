@@ -1230,6 +1230,7 @@
     <string name="nm_remote_no_answer">%1$s yanıt vermeden tamamlandı.</string>
     <string name="nm_remote_failed">%1$s yanıt vermedi: %2$s</string>
     <string name="nm_remote_offline">%1$s çevrimdışı.</string>
+    <string name="nm_remote_unknown_device">%1$s adlı bir cihaza ulaşılamadı, bu yüzden gönderilmedi. Cihazlar bölümüne bakın ya da satırı \@ olmadan yazıp burada çalıştırın.</string>
     <string name="nm_remote_chat_busy">Bir cihaza görev göndermeden önce bu konuşmanın bitmesini bekleyin.</string>
 
     <string name="nm_reply_unread">Okunmamış yanıt</string>

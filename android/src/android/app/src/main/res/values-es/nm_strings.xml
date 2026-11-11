@@ -1230,6 +1230,7 @@
     <string name="nm_remote_no_answer">%1$s terminó sin responder.</string>
     <string name="nm_remote_failed">%1$s no respondió: %2$s</string>
     <string name="nm_remote_offline">%1$s está desconectado.</string>
+    <string name="nm_remote_unknown_device">No se puede alcanzar ningún dispositivo llamado %1$s, así que no se envió. Míralo en Dispositivos, o escribe la línea sin la \@ para ejecutarla aquí.</string>
     <string name="nm_remote_chat_busy">Espera a que termine esta conversación antes de enviar una tarea a un dispositivo.</string>
 
     <string name="nm_reply_unread">Respuesta sin leer</string>

@@ -1238,6 +1238,7 @@
     <string name="nm_remote_no_answer">%1$s zakończyło pracę bez odpowiedzi.</string>
     <string name="nm_remote_failed">%1$s nie odpowiedziało: %2$s</string>
     <string name="nm_remote_offline">%1$s jest offline.</string>
+    <string name="nm_remote_unknown_device">Żadne urządzenie o nazwie %1$s nie jest osiągalne, więc tego nie wysłano. Sprawdź w Urządzeniach albo napisz wiersz bez \@, aby wykonać go tutaj.</string>
     <string name="nm_remote_chat_busy">Poczekaj na zakończenie tej rozmowy przed wysłaniem zadania do urządzenia.</string>
 
     <string name="nm_reply_unread">Nieprzeczytana odpowiedź</string>

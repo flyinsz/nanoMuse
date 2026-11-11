@@ -1230,6 +1230,7 @@
     <string name="nm_remote_no_answer">Natapos ang %1$s nang walang sagot.</string>
     <string name="nm_remote_failed">Hindi sumagot ang %1$s: %2$s</string>
     <string name="nm_remote_offline">Offline ang %1$s.</string>
+    <string name="nm_remote_unknown_device">Walang maabot na device na pinangalanang %1$s, kaya hindi ito naipadala. Tingnan sa Mga device, o isulat ang linya nang walang \@ para patakbuhin dito.</string>
     <string name="nm_remote_chat_busy">Hintaying matapos ang usapang ito bago magpadala ng gawain sa device.</string>
 
     <string name="nm_reply_unread">Hindi pa nababasang sagot</string>

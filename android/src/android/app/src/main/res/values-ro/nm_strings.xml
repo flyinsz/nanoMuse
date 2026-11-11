@@ -1234,6 +1234,7 @@
     <string name="nm_remote_no_answer">%1$s a terminat fără răspuns.</string>
     <string name="nm_remote_failed">%1$s nu a răspuns: %2$s</string>
     <string name="nm_remote_offline">%1$s este offline.</string>
+    <string name="nm_remote_unknown_device">Niciun dispozitiv numit %1$s nu poate fi contactat, așa că nu s-a trimis. Vezi la Dispozitive, sau scrie linia fără \@ ca s-o rulezi aici.</string>
     <string name="nm_remote_chat_busy">Așteaptă încheierea acestei conversații înainte să trimiți o sarcină unui dispozitiv.</string>
 
     <string name="nm_reply_unread">Răspuns necitit</string>

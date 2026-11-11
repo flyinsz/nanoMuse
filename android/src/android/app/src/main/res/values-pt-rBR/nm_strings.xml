@@ -1231,6 +1231,7 @@
     <string name="nm_remote_no_answer">%1$s terminou sem responder.</string>
     <string name="nm_remote_failed">%1$s não respondeu: %2$s</string>
     <string name="nm_remote_offline">%1$s está offline.</string>
+    <string name="nm_remote_unknown_device">Nenhum aparelho chamado %1$s está acessível, então isto não foi enviado. Veja em Aparelhos, ou escreva a linha sem o \@ para executá-la aqui.</string>
     <string name="nm_remote_chat_busy">Espere esta conversa terminar antes de enviar uma tarefa a outro equipamento.</string>
 
     <string name="nm_reply_unread">Resposta não lida</string>

@@ -1196,6 +1196,7 @@
     <string name="nm_remote_no_answer">%1$s 已結束，但沒有回覆。</string>
     <string name="nm_remote_failed">%1$s 未回覆：%2$s</string>
     <string name="nm_remote_offline">%1$s 目前離線。</string>
+    <string name="nm_remote_unknown_device">沒有能到達的「%1$s」，這則沒有送出。可在「裝置」裡查看，或去掉 \@ 讓它在這台手機上跑。</string>
     <string name="nm_remote_chat_busy">請等本次對話執行完畢後再傳送裝置任務。</string>
 
     <string name="nm_reply_unread">未讀回覆</string>

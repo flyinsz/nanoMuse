@@ -6371,6 +6371,7 @@ class ChatViewModel(
                     io.github.nanomuse.sync.RemoteChatBridge.Issue.ATTACHMENTS -> R.string.nm_remote_attachments
                     io.github.nanomuse.sync.RemoteChatBridge.Issue.BUSY -> R.string.nm_remote_chat_busy
                     io.github.nanomuse.sync.RemoteChatBridge.Issue.FAILED -> R.string.nm_hub_err_generic
+                    io.github.nanomuse.sync.RemoteChatBridge.Issue.UNKNOWN_DEVICE -> R.string.nm_remote_unknown_device
                 }
                 _error.value = context.getString(resource, device)
             }
@@ -6428,6 +6429,13 @@ class ChatViewModel(
                 val sid = realSessionId.ifEmpty { sessionId }
                 if (sid.isNotEmpty()) io.github.nanomuse.sync.ConversationSync.claim(sid)
             }
+            // nanoMuse: an `@` that resolved to no device is one of two things (§4.2). `@本机`
+            // (or this phone's own name) is the person asking for this phone, and it runs here.
+            // Anything else named a device the account could not reach, and the bridge refuses it
+            // rather than answering from this phone's memory — the same judgement `takeOwnerHere`
+            // makes, exposed so the refusal can be told apart from "meant for this phone".
+            override fun namesSelf(text: String): Boolean =
+                io.github.nanomuse.sync.DeviceOwner.addressesSelf(text, io.github.nanomuse.hub.Hub.name(context))
             // nanoMuse: `@<device>` moved the chat's context there (§4.1). Recorded now so the
             // placeholder shows that device and the next line — with no `@` — goes to it too.
             override fun tookOwnerThere(deviceId: String, deviceName: String) {

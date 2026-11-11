@@ -1226,6 +1226,7 @@
     <string name="nm_remote_no_answer">%1$s は応答なしで終了しました。</string>
     <string name="nm_remote_failed">%1$s から応答がありません：%2$s</string>
     <string name="nm_remote_offline">%1$s はオフラインです。</string>
+    <string name="nm_remote_unknown_device">%1$s という名前のデバイスに届かなかったため、送信していません。デバイスで確認するか、\@ を外してこの端末で実行してください。</string>
     <string name="nm_remote_chat_busy">この会話の処理が終わってからデバイスにタスクを送信してください。</string>
 
     <string name="nm_reply_unread">未読の返信</string>

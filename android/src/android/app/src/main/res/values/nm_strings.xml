@@ -1210,6 +1210,7 @@
     <string name="nm_remote_no_answer">%1$s finished without an answer.</string>
     <string name="nm_remote_failed">%1$s did not answer: %2$s</string>
     <string name="nm_remote_offline">%1$s is offline.</string>
+    <string name="nm_remote_unknown_device">No device named after %1$s is reachable, so this was not sent. Check Devices, or write the line without the \@ to run it here.</string>
     <string name="nm_remote_chat_busy">Wait for this conversation to finish before sending a device task.</string>
 
     <string name="nm_reply_unread">Unread reply</string>

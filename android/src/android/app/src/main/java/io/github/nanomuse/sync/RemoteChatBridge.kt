@@ -17,7 +17,7 @@ class RemoteChatBridge(
     private val host: Host,
     private val newTask: (Device, String, String) -> Task,
 ) {
-    enum class Issue { AMBIGUOUS, OFFLINE, ATTACHMENTS, BUSY, FAILED }
+    enum class Issue { AMBIGUOUS, OFFLINE, ATTACHMENTS, BUSY, FAILED, UNKNOWN_DEVICE }
     interface Task {
         val text: String
         val blocks: List<AssistantBlock>
@@ -57,6 +57,13 @@ class RemoteChatBridge(
         // no device — so it hands the text over and the host judges, which keeps an unknown `@`
         // from moving the owner.
         fun takeOwnerHere(text: String) {}
+        // nanoMuse: whether a leading-`@` line that resolved to no device names *this* phone
+        // (§4.2 rule 3). The bridge cannot decide it — this phone is not in the account's device
+        // list — so the host answers. False means the line named something nobody can reach (a
+        // device that is offline, or a name that is not one), and the bridge refuses it rather
+        // than quietly running it here: the person asked for that device, and answering from this
+        // phone's memory is a different conversation (§4.2).
+        fun namesSelf(text: String): Boolean = true
         // nanoMuse: a line handed to another device makes *that* device the chat's owner from
         // now on (§4.1: the owner is the device that ran the last turn). The host records it
         // the moment the task goes, so the composer shows `@<that device>` at once and the
@@ -96,15 +103,19 @@ class RemoteChatBridge(
             if (known == null) return refuse(text, Issue.OFFLINE, host.ownerName() ?: ownerId)
             route = RemoteDeviceRoute.Selected(known, text)
         }
-        // nanoMuse: still nobody addressed — nobody to hand it to, so this phone runs it (upstream's
-        // own path). Reached by `@本机`/an unknown `@` (meant for this phone) and by a chat with no
-        // owner. It must not fall into the refusal below, which would wrongly error on `@本机`.
+        // nanoMuse: still nobody addressed. A line that names this phone (`@本机`) runs here, as
+        // upstream did. A leading `@` that names anything else is a device the person asked for
+        // and the account could not reach — offline, or a name no device answers to. Running it
+        // here would answer from this phone's memory a conversation it never held, which is the
+        // bug that made an `@` to an unreachable NAS come back with the phone's own words (§4.2).
+        // It is refused instead, and the person is told.
         if (route == RemoteDeviceRoute.None) {
-            // nanoMuse: a line that names this phone takes the context back (§4.2 rule 3), so the
-            // composer stops offering the other device and the next line stays here. The host
-            // judges the text, so an unknown `@nobody` leaves the owner where it was.
-            if (text.trimStart().startsWith("@")) host.takeOwnerHere(text)
-            return false
+            val addressed = text.trimStart().startsWith("@")
+            if (!addressed) return false
+            val self = host.namesSelf(text)
+            if (self) host.takeOwnerHere(text)
+            if (self) return false
+            return refuse(text, Issue.UNKNOWN_DEVICE)
         }
         if (route !is RemoteDeviceRoute.Selected) return refuse(text, Issue.AMBIGUOUS)
         if (host.busy || compacting) return refuse(text, Issue.BUSY)
