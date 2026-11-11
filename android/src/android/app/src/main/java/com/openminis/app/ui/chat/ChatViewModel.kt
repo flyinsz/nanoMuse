@@ -580,7 +580,15 @@ class ChatViewModel(
             // It is not persisted: the relay's stream is a hint, and the real reply lands by
             // sync and takes its place. Appended here (not merged into `_messages`) so the tail
             // window, the identity-equal fast path and every other reader stay untouched.
-            val withRemote = if (remote == null) raw else raw + remote
+            // nanoMuse: a handed-over turn on a synced chat arrives by *two* routes — the hub's
+            // own task events (this phone asked, so it holds the call, and those frames carry the
+            // tool cards and the thinking) and the relay's `stream` fanout (§4.4, the same frames
+            // a run here would send, which carry the words only). Drawing both stacks two bubbles
+            // saying the same thing. The hub's bubble wins while it is there, because it is the
+            // fuller picture; the relay stream is what every other device of the account sees, and
+            // it is the only route for a turn this phone did not itself ask for.
+            val hubLive = raw.any { it.id.startsWith("nm_remote_") }
+            val withRemote = if (remote == null || hubLive) raw else raw + remote
             // [T-bridge-message-ui-leak-android] Single UI-collection sink for
             // EVERY path that pushes messages to the list (loadSession, live
             // stream append, compact rebuild, snapshot reload, sync refresh…).
