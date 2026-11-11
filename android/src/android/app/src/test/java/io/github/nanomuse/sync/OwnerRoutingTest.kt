@@ -155,6 +155,9 @@ class OwnerRoutingTest {
         assertTrue("a refusal is addressed here, so it must not fall into the local model", b.send("@nobody do it", listOf(desk), false, false))
         assertNull("nothing is routed", rec.routed)
         assertEquals(RemoteChatBridge.Issue.UNKNOWN_DEVICE, host.lastIssue)
+        // the name as the person typed it, so the message can say which `@` reached nobody
+        // rather than leaving a hole where the name belongs
+        assertEquals("the name addressed rides with the refusal", "nobody", host.lastIssueDevice)
         assertEquals("the draft comes back", "@nobody do it", host.draft)
         assertNull("an unknown `@` is not this phone, so the owner does not move", host.tookHere)
     }

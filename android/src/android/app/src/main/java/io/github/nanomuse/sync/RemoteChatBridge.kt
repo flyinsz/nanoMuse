@@ -86,6 +86,21 @@ class RemoteChatBridge(
     private class Active(val id: String, val task: Task) { var job: Job? = null }
     private var active: Active? = null
 
+    /**
+     * The name a leading `@` addressed, as the person typed it — up to the first space or
+     * punctuation, so `@//nas/ show me` reports `//nas/` and `@NAS-by-Donny build it` reports
+     * `NAS-by-Donny`. Only for the refusal message: the router works on device names, not on
+     * this. An empty result is left empty; the caller's string then has nothing to name.
+     */
+    private fun addressedName(text: String): String {
+        val rest = text.trimStart().removePrefix("@")
+        val end = rest.indexOfFirst { it.isWhitespace() || it in NAME_BREAKS }
+        return (if (end < 0) rest else rest.substring(0, end)).trim()
+    }
+
+    /** Where a name stops for [addressedName]: the same punctuation the router accepts. */
+    private val NAME_BREAKS = charArrayOf(':', '：', ',', '，', ';', '；')
+
     private fun refuse(text: String, issue: Issue, device: String = ""): Boolean {
         // The composer clears its field before dispatch; a refusal must put it back.
         host.restoreDraft(text)
@@ -127,7 +142,10 @@ class RemoteChatBridge(
             val self = host.namesSelf(text)
             if (self) host.takeOwnerHere(text)
             if (self) return false
-            return refuse(text, Issue.UNKNOWN_DEVICE)
+            // the name as the person typed it, so the message says which `@` reached nobody
+            // ("there is no reachable device called 「//nas/」"); without it the line reads with
+            // an empty hole where the name should be
+            return refuse(text, Issue.UNKNOWN_DEVICE, addressedName(text))
         }
         if (route !is RemoteDeviceRoute.Selected) return refuse(text, Issue.AMBIGUOUS)
         if (host.busy || compacting) return refuse(text, Issue.BUSY)
