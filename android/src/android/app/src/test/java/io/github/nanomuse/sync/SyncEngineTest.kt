@@ -89,9 +89,10 @@ class SyncEngineTest {
         // and the phone's line went up under the adopted cid
         assertEquals(setOf("cid-main"), relay.msgs.values.map { it.cid }.toSet())
         assertEquals(3, relay.msgs.size)
-        // the mac's two rows carry its name; the phone's own row carries nothing
+        // the mac's two rows are one stretch, so its name goes over the first of them only; the
+        // phone's own row that follows closes the stretch and carries nothing
         val rows = p.chats.messages("main")
-        assertEquals(mapOf(rows[0].id to "Mac", rows[1].id to "Mac"), p.engine.captions())
+        assertEquals(mapOf(rows[0].id to "Mac"), p.engine.captions())
     }
 
     @Test fun `no main chat yet - the remote one becomes it`() = runTest {
@@ -145,13 +146,13 @@ class SyncEngineTest {
         val rows = p.chats.messages(local.id)
         assertEquals(2, rows.size)
         assertTrue(rows[0].partsJson.contains("[Attachment list.pdf]"))
-        // per message, not per chat: each pulled row says where it was written
-        assertEquals(rows.associate { it.id to "Pixel 8" }, p.engine.captions())
+        // one caption for the stretch, on the row that begins it, not one per message
+        assertEquals(mapOf(rows[0].id to "Pixel 8"), p.engine.captions())
         // the person goes on here: the new turn syncs back under the same cid
         p.chats.user(local.id, "and bread"); p.chats.assistant(local.id, "added")
         p.engine.push()
         assertEquals(4, relay.msgs.values.count { it.cid == "cid-s" })
-        assertEquals(2, p.engine.captions().size) // this phone's own two rows carry no caption
+        assertEquals(1, p.engine.captions().size) // one stretch, and this phone's own rows carry none
         // the second pull brings nothing new: known mids are left alone
         assertEquals(0, p.engine.pull().applied)
         assertEquals(4, p.chats.messages(local.id).size)

@@ -518,8 +518,12 @@ class SyncEngine(
     /** The local chat a relay `cid` stands for, if this phone has it under this account. */
     suspend fun sessionOf(cid: String): String? = store.conversationByCid(cid)?.takeIf { it.mine() }?.sessionId
 
-    /** Which local rows were written on another device, and that device's name — the "From Pixel 8" caption. */
-    suspend fun captions(): Map<String, String> = captions(store, deviceId, account)
+    /**
+     * Which local rows begin a stretch written on another device, and that device's name — the
+     * "From Pixel 8" caption. Ordered by the chat itself, so one line covers a whole stretch
+     * rather than one per message.
+     */
+    suspend fun captions(): Map<String, String> = captions(store, deviceId, account, chats)
 
     /** The local rows another device wrote, and which device (C9: never this phone's unfinished turn). */
     suspend fun remoteRows(): Map<String, String> = remoteRows(store, deviceId, account)
@@ -581,15 +585,43 @@ class SyncEngine(
         }
 
         /**
-         * Local row id → the name of the device it came from, for rows pulled from the account's
-         * other devices (contract C8: a caption per message, no badge per chat — the main chat
-         * is everyone's and a side chat is the same chat everywhere).
+         * Local row id → the name of the device it came from, for the rows that begin a stretch
+         * written on another device of the account (contract C8's caption).
+         *
+         * A caption marks a *change* of writer, not every row: the rows of one device's stretch
+         * all sit under the single line that names it, and a stretch of this phone's own rows
+         * carries none. Rows written elsewhere used to be captioned one by one, which put the
+         * same line over every other message and read as noise. The order is the chat's own
+         * ([LocalChats.messages], the order the person sees), so the boundary falls where it
+         * reads; with no [chats] to order by, each pulled row is captioned as before.
+         *
+         * `hidden` chats (another account's, C10) are left out, and so is this phone's own id.
          */
-        suspend fun captions(store: SyncStore, deviceId: String, account: String? = null): Map<String, String> {
+        suspend fun captions(
+            store: SyncStore,
+            deviceId: String,
+            account: String? = null,
+            chats: LocalChats? = null,
+        ): Map<String, String> {
             val hidden = hidden(store, account)
-            return store.pulledMessages()
+            val pulled = store.pulledMessages()
                 .filter { it.device.isNotBlank() && it.device != deviceId && it.deviceName.isNotBlank() && it.sessionId !in hidden }
-                .associate { it.messageId to it.deviceName }
+            if (chats == null) return pulled.associate { it.messageId to it.deviceName }
+            val byId = pulled.associateBy { it.messageId }
+            val out = mutableMapOf<String, String>()
+            for (sessionId in pulled.map { it.sessionId }.toSet()) {
+                val rows = runCatching { chats.messages(sessionId) }.getOrNull() ?: continue
+                // "" stands for this phone: a stretch of its own rows closes the one before it
+                var last = ""
+                for (row in rows) {
+                    val from = byId[row.id]
+                    val device = from?.device.orEmpty()
+                    if (device == last) continue
+                    if (device.isNotBlank()) out[row.id] = from!!.deviceName
+                    last = device
+                }
+            }
+            return out
         }
 
         /**
