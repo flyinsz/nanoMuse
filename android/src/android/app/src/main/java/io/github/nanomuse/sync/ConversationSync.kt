@@ -424,6 +424,22 @@ object ConversationSync {
     }
 
     /**
+     * nanoMuse: the relay's conversation id for the local chat [sessionId], or null when this
+     * device has not minted one (sync off, or a chat that never went up).
+     *
+     * A handed-off line has to name the conversation it belongs to: the runtime runs it on
+     * the chat whose context it already holds (executor handoff v2 §E), and only a cid is
+     * common to both sides. Without it the runtime opens a fresh `From <device>` thread, which
+     * is neither the same conversation nor one whose live output travels back (§4.4) — the
+     * asker then watches a silent wait and gets the whole answer at once.
+     */
+    suspend fun cidOf(sessionId: String): String? {
+        val ctx = app ?: return null
+        if (sessionId.isBlank()) return null
+        return runCatching { RoomSyncStore(ctx).conversation(sessionId)?.cid }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    /**
      * The hub's `{"type": "stream", "cid", "from", "device_name", "round", "seq", "delta"?,
      * "reasoning"?, "tool"?, "done"}` (executor handoff v2 §C): one batch of a turn running on
      * another device. Mapped to the local chat and folded into that chat's rounds by `round`, so

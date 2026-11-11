@@ -14,7 +14,12 @@ import kotlinx.coroutines.runInterruptible
 import org.json.JSONObject
 
 /** Owns a remote reply, not a local agent run. All UI callbacks run in the caller's scope. */
-class RemoteTaskChat(private val context: Context, private val device: Device, text: String, val callId: String) : RemoteChatBridge.Task {
+class RemoteTaskChat(
+    private val context: Context,
+    private val device: Device,
+    text: String,
+    val callId: String,
+) : RemoteChatBridge.Task {
     private val task = RemoteDeviceTask(device, text, Computers.uiLanguage(context), callId)
     private val reply = RemoteTaskReply(device.id)
     override var failed = false
@@ -42,6 +47,11 @@ class RemoteTaskChat(private val context: Context, private val device: Device, t
     }
 
     override suspend fun run(sessionId: String, update: () -> Unit) {
+        // nanoMuse: name the chat before the call goes. A cid is the only thing both sides
+        // call this conversation by, so it is what makes the far end run the turn on the
+        // context it already holds instead of a fresh `From <device>` thread (§E). Best
+        // effort: a chat with no cid yet keeps the older behaviour rather than failing.
+        task.cid = ConversationSync.cidOf(sessionId) ?: ""
         try {
             exchange(sessionId, update)
         } catch (e: CancellationException) {
