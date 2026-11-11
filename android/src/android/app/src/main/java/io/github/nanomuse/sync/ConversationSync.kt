@@ -456,7 +456,15 @@ object ConversationSync {
             _streams.update { all ->
                 val forChat = all[sessionId].orEmpty()
                 val merged = Streams.merge(forChat, batch)
-                if (merged == forChat) all else all + (sessionId to merged)
+                // nanoMuse: settled rounds are dropped as new ones arrive. `live()` already hides
+                // them, but nothing ever removed them, so every round this chat ever streamed
+                // stayed in memory for the life of the process.
+                val kept = Streams.prune(merged)
+                when {
+                    kept == forChat -> all
+                    kept.isEmpty() -> all - sessionId
+                    else -> all + (sessionId to kept)
+                }
             }
         }
     }

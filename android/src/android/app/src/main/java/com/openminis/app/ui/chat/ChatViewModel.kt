@@ -528,6 +528,19 @@ class ChatViewModel(
     val visibleMessageCap: StateFlow<Int> = _visibleMessageCap.asStateFlow()
 
     /**
+     * nanoMuse: whether two texts are the same answer as far as the eye can tell. The relay's
+     * stream is batched and a batch can be lost (framing, a reconnect), so the hint's words are
+     * not always the final row's word for word — only the opening is reliably shared. Used to
+     * tell "the real row is here, drop the hint" from "the hint is all we have so far".
+     */
+    private fun nmSameOpening(a: String, b: String, chars: Int = 24): Boolean {
+        val x = a.trim().replace("\n", " ")
+        val y = b.trim().replace("\n", " ")
+        if (x.isEmpty() || y.isEmpty()) return false
+        return x.take(chars) == y.take(chars)
+    }
+
+    /**
      * nanoMuse: the tail bubble of a turn running on another device (executor handoff v2 §4.4),
      * or null when none is live for the open chat. Fed by [ConversationSync.onStreamFrame] via
      * the relay's `stream` frames, and drawn with the same assistant bubble a local run uses, so
@@ -584,11 +597,17 @@ class ChatViewModel(
             // own task events (this phone asked, so it holds the call, and those frames carry the
             // tool cards and the thinking) and the relay's `stream` fanout (§4.4, the same frames
             // a run here would send, which carry the words only). Drawing both stacks two bubbles
-            // saying the same thing. The hub's bubble wins while it is there, because it is the
-            // fuller picture; the relay stream is what every other device of the account sees, and
-            // it is the only route for a turn this phone did not itself ask for.
+            // saying the same thing, so the hint stands down as soon as the turn has anything
+            // better to show: while the hub's own bubble is up (the fuller picture), once the
+            // stream itself said `done` (the words are complete and the real row is on its way),
+            // and once a real row carrying the same opening has landed. Measured: the stream can
+            // lose a middle batch, so its text is not always the final row's — comparing the
+            // opening is what catches it. The relay stream stays the only route for a turn this
+            // phone did not itself ask for.
             val hubLive = raw.any { it.id.startsWith("nm_remote_") }
-            val withRemote = if (remote == null || hubLive) raw else raw + remote
+            val streamDone = remote != null && !remote.isStreaming
+            val landed = remote != null && raw.any { it.role == "assistant" && nmSameOpening(it.content, remote.content) }
+            val withRemote = if (remote == null || hubLive || streamDone || landed) raw else raw + remote
             // [T-bridge-message-ui-leak-android] Single UI-collection sink for
             // EVERY path that pushes messages to the list (loadSession, live
             // stream append, compact rebuild, snapshot reload, sync refresh…).
@@ -6413,22 +6432,28 @@ class ChatViewModel(
                 // those, the run never produced an answer to travel.
                 val write = !task.handedOver || task.failed || task.stopped
                 if (write) nmAppendAssistantLine(sessionId, task.text)
+                val bubbleId = "nm_remote_$id"
+                // nanoMuse: the live bubble goes as soon as the real row is here. It used to be
+                // kept for the pull to replace, but the pull that carried the answer can land
+                // *before* this runs (the far device pushes, then answers the call) — nothing
+                // reloads afterwards, so the bubble stayed for good and the chat showed the
+                // answer twice while the database held it once. When the row is not here yet the
+                // bubble is kept, and the pull that brings it reloads the chat, which drops it.
+                val arrived = !write && _messages.value.any { it.id != bubbleId && it.role == "assistant" && it.content.trim() == task.text.trim() }
+                val drop = write || arrived
                 val savedId = _messages.value.lastOrNull()?.id
                 _messages.value = _messages.value.map {
                     when {
-                        // the pulled row supersedes this bubble, which is dropped as soon as the
-                        // pull lands (`reloadSessionFromDb` rebuilds from the database). Keeping
-                        // it until then is what stops the answer blinking out for a pull cycle.
-                        it.id == "nm_remote_$id" && !write -> it.copy(
+                        it.id == bubbleId && !drop -> it.copy(
                             toolBlocks = task.blocks, isStreaming = false,
                             isAwaitingModelResponse = false,
                             error = if (task.failed) task.text else null,
                         )
-                        it.id == "nm_remote_$id" -> it
+                        it.id == bubbleId -> it
                         it.id == savedId -> it.copy(toolBlocks = task.blocks, error = if (task.failed) task.text else null)
                         else -> it
                     }
-                }.filterNot { it.id == "nm_remote_$id" && write }
+                }.filterNot { it.id == bubbleId && drop }
             }
             override fun afterTurn() { nmSendNextQueued() }
             // nanoMuse: the owner map is filled at init and after a pull; a send asks for a
